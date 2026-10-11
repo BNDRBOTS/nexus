@@ -42,8 +42,10 @@ Done and tested (`tests/test_sse.py`, `tests/test_api.py` test_17, test_18):
 - Provider errors and malformed frames raise `ProviderError`.
 - Settings validation: preset, thinking, reasoning_effort, context_chars ≥ 1000.
 - Stale default migration: only the exact pair `https://api.deepseek.com/v1` + `deepseek-chat`.
+- Retry: 429 / 500 / 502 / 503 / 504 and connection errors are retried up to 3 attempts, with `Retry-After` honored up to 8 s. Retries happen only before the stream opens, so output is never duplicated. Other 4xx are not retried.
+- OpenRouter: docs (fetched 2026-10) define `reasoning: {effort}` in requests and `reasoning` on each message in responses. Nexus matches both. `reasoning_details` is not referenced in those docs, so no passback is implemented. Length-cut replies with empty content raise, per docs (reasoning counts against `max_tokens`).
 
-Not built: per-model capability discovery (OpenRouter `/models`), cost or pricing display, model-specific moderation, image/TTS providers.
+Not built: per-model capability discovery (OpenRouter `/api/v1/models` `supported_efforts`), cost or pricing display, model-specific moderation, image/TTS providers.
 
 ## Known risks
 
@@ -54,7 +56,7 @@ Not built: per-model capability discovery (OpenRouter `/models`), cost or pricin
 
 ## Verification
 
-- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 37 tests OK.
+- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 39 tests OK.
 - `pyflakes server tests`: clean.
 - `node --check js/*.js`: clean.
 - Live provider calls: not run (no credentials in sandbox). Behaviour checked against mock OpenAI-compatible server only.

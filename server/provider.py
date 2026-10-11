@@ -191,6 +191,41 @@ def _frame(line_data):
         raise ProviderError(f"malformed stream frame: {e}"[:200])
 
 
+RETRY_STATUS = (429, 500, 502, 503, 504)
+RETRY_ATTEMPTS = 3           # total attempts, connection phase only
+RETRY_MAX_WAIT = 8.0         # seconds; Retry-After is honored up to this cap
+
+
+def _open_with_retry(cfg, body, timeout):
+    """Opens the stream. Retries 429/5xx and network errors before any output exists, so no text is duplicated.
+    Mid-stream failures are never retried here."""
+    data = json.dumps(body).encode("utf-8")
+    last = None
+    for attempt in range(RETRY_ATTEMPTS):
+        req = urllib.request.Request(cfg["base"] + "/chat/completions", data=data,
+                                     headers=_headers(cfg), method="POST")
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            last = ProviderError(f"HTTP {e.code}: {e.read(400).decode('utf-8', 'replace')}")
+            if e.code not in RETRY_STATUS:
+                raise last
+            wait = _retry_after(e.headers.get("Retry-After")) or min(2.0 ** attempt, RETRY_MAX_WAIT)
+        except Exception as e:  # network / DNS / TLS / timeout before headers
+            last = ProviderError(f"{type(e).__name__}: {e}")
+            wait = min(2.0 ** attempt, RETRY_MAX_WAIT)
+        if attempt + 1 < RETRY_ATTEMPTS:
+            time.sleep(min(wait, RETRY_MAX_WAIT))
+    raise last
+
+
+def _retry_after(value):
+    try:
+        return max(0.0, min(float(value), RETRY_MAX_WAIT))
+    except (TypeError, ValueError):
+        return None
+
+
 def chat_stream(cfg, messages, tools=None, temperature=None, timeout=180):
     """Yields ("reasoning", text) and ("delta", text) while streaming, then ("final", {...}).
     final = {content, reasoning, tool_calls, finish_reason, usage}."""
@@ -201,14 +236,7 @@ def chat_stream(cfg, messages, tools=None, temperature=None, timeout=180):
         body["tools"] = tools
         body["tool_choice"] = "auto"
     body = _extras(cfg, body, tools)
-    req = urllib.request.Request(cfg["base"] + "/chat/completions", data=json.dumps(body).encode("utf-8"),
-                                 headers=_headers(cfg), method="POST")
-    try:
-        resp = urllib.request.urlopen(req, timeout=timeout)
-    except urllib.error.HTTPError as e:
-        raise ProviderError(f"HTTP {e.code}: {e.read(400).decode('utf-8', 'replace')}")
-    except Exception as e:  # network / DNS / TLS
-        raise ProviderError(f"{type(e).__name__}: {e}")
+    resp = _open_with_retry(cfg, body, timeout)
 
     acc = _Acc()
     with resp:

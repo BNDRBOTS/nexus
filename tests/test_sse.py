@@ -119,3 +119,51 @@ class StreamDeadlineTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class _Script(BaseHTTPRequestHandler):
+    """First request gets `fail_code` (with Retry-After: 0), later requests stream one good completion."""
+    hits = 0
+    fail_code = 429
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        type(self).hits += 1
+        if type(self).hits == 1:
+            self.send_response(type(self).fail_code)
+            self.send_header("Retry-After", "0")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+
+
+class RetryTests(unittest.TestCase):
+    def _serve(self, code):
+        _Script.hits, _Script.fail_code = 0, code
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _Script)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return {"base": f"http://127.0.0.1:{srv.server_address[1]}", "model": "m", "key": "",
+                "headers": {}, "preset": "custom", "route": "custom"}
+
+    def test_429_retried_then_succeeds_without_duplicate_text(self):
+        cfg = self._serve(429)
+        out = list(chat_stream(cfg, [{"role": "user", "content": "x"}]))
+        self.assertEqual(_Script.hits, 2)
+        self.assertEqual([k for k, _ in out], ["delta", "final"])
+        self.assertEqual(out[-1][1]["content"], "ok")
+
+    def test_400_is_not_retried(self):
+        cfg = self._serve(400)
+        with self.assertRaises(ProviderError):
+            list(chat_stream(cfg, [{"role": "user", "content": "x"}]))
+        self.assertEqual(_Script.hits, 1)
