@@ -21,6 +21,7 @@ Tests (end-to-end against a mock model and mock MCP server, plus unit tests for 
 
 ```bash
 python3 -m unittest tests.test_api tests.test_sse tests.test_auth
+node tests/test_knacks.js
 ```
 
 ## Configuration (env)
@@ -51,6 +52,7 @@ server/
   app.py       HTTP routes, auth, SSE, static files
 js/
   00-core.js   global NX: state, api, stream (SSE), md, theme, modal/ask/confirm/toast
+  05-knacks.js NX.KNACKS: per-message prompt transforms (data) + NX.knackPrompt (pure builder)
   10-chat.js   sidebar, topbar, messages, composer, slash commands, send/regenerate
   20-panels.js Canvas, Project, Context, Record, Status panels; NX.watchRun
   30-settings.js settings modal: model, theme, roles, skills, mcp, workflows, data

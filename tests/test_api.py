@@ -411,6 +411,16 @@ class NexusTests(unittest.TestCase):
         self.assertIn("Track facts.", blob)
         self.assertEqual(ctx["snapshot"]["scope"], ["notes/source.md"])
 
+    def test_23_display_label_stored_for_knacks(self):
+        s, chat = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "work"})
+        s, res = self.api.call("POST", f"/api/chats/{chat['id']}/messages",
+                               {"content": "LONG PROMPT BODY", "display": "Shorter: label only"})
+        self.assertEqual(s, 200, res)
+        s, got = self.api.call("GET", f"/api/chats/{chat['id']}")
+        user = [m for m in got["messages"] if m["role"] == "user"][0]
+        self.assertEqual(user["meta"].get("display"), "Shorter: label only")
+        self.assertEqual(user["content"], "LONG PROMPT BODY")
+
 
 if __name__ == "__main__":
     unittest.main()

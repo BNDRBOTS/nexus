@@ -246,7 +246,8 @@ def chat_context(req):
 def post_message(req):
     body = req.json()
     return _turn_response(req, req.p["id"], body.get("content"), regenerate=False,
-                          stream=bool(body.get("stream")) or req.q.get("stream") == "1")
+                          stream=bool(body.get("stream")) or req.q.get("stream") == "1",
+                          display=body.get("display"))
 
 
 @route("POST", "/api/chats/{id}/regenerate")
@@ -256,9 +257,9 @@ def regenerate(req):
                           stream=bool(body.get("stream")) or req.q.get("stream") == "1")
 
 
-def _turn_response(req, chat_id, content, regenerate, stream):
+def _turn_response(req, chat_id, content, regenerate, stream, display=None):
     if not stream:
-        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key)
+        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, display=display)
         return 200, result
     h = req.h
     h.send_response(200)
@@ -277,7 +278,7 @@ def _turn_response(req, chat_id, content, regenerate, stream):
             dead["v"] = True
 
     try:
-        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, emit=emit)
+        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, emit=emit, display=display)
         emit("done", result)
     except Exception as e:
         emit("error", {"status": _status_for(e), "error": str(e)})

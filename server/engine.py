@@ -137,7 +137,7 @@ def _load_turn(chat, st, provider_key):
     return project, mode, role, skills, specs, routes, cfg, temp
 
 
-def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None):
+def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None, display=None):
     with _ChatLock(chat_id):
         chat = store.get_chat(chat_id)
         old = None
@@ -150,7 +150,8 @@ def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None):
             text = (content or "").strip()
             if not text:
                 raise EngineError("empty message")
-            um = new_message("user", text)
+            # display: optional short label shown in the UI in place of the full content (e.g. knack prompts)
+            um = new_message("user", text, {"display": str(display)[:300]} if display else None)
             chat["messages"].append(um)
             store.put_chat(chat)
             store.add_action("message.saved", um["id"], {"role": "user", "hash": _h(text), "chars": len(text)},

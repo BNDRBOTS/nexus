@@ -24,7 +24,7 @@ Version 2.0.0. Branch `arena/fceba36e-nexus`.
 | 15 | Custom API key OR operator (paid) key | done | `provider.resolve`; key sent per request, never stored server-side | none |
 | 16 | Workflow sections / external call trigger | partial | workflow editors (`js/30-settings.js`), `start_run` | external trigger auth not documented |
 | 17 | Custom colors | done | theme CSS variables, `theme` settings | none |
-| 18 | Per-message prompt-stick menu and knacks | partial | `set_pin`, pin chip | knacks not built |
+| 18 | Per-message prompt-stick menu and knacks | partial | pin = stick (`set_pin`); Knacks popover on assistant replies (`js/05-knacks.js`, `runKnack`): Continue, Next step, Checklist, Shorter, Critique, To table | knack UI not exercised in a browser; builder unit-tested (`tests/test_knacks.js`); no user-defined knacks yet |
 | 19 | Expansion to video / sound | open | — | architecture only |
 | 20 | Polished UI (Perplexity / Kimi / Grok level) | partial | `css/app.css`, `index.html` | not visually reviewed in this session |
 | 21 | Provider protocol (this session) | done | see below | none known |
@@ -56,7 +56,7 @@ Not built: per-model capability discovery (OpenRouter `/api/v1/models` `supporte
 
 ## Verification
 
-- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 40 tests OK (`test_api` 22, `test_sse` 16, `test_auth` 2).
+- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 41 Python tests OK (`test_api` 23, `test_sse` 16, `test_auth` 2) and `tests/test_knacks.js` OK.
 - `pyflakes server tests`: clean.
 - `node --check js/*.js`: clean.
 - Live provider calls: not run (no credentials in sandbox). Behaviour checked against mock OpenAI-compatible server only.

@@ -180,9 +180,12 @@
       `<button class="act" data-act="save" data-id="${m.id}">Save to workspace</button>`,
       !isUser && isLast ? `<button class="act" data-act="regen" data-id="${m.id}">Regenerate</button>` : '',
       isUser ? `<button class="act" data-act="edit" data-id="${m.id}">Edit</button>` : '',
+      !isUser ? `<span class="knack-wrap"><button class="act" data-knack-toggle="${m.id}">Knacks</button>` +
+        `<div class="knack-menu hidden" role="menu">${NX.KNACKS.map((k) =>
+          `<button role="menuitem" data-knack="${k.id}" data-id="${m.id}">${esc(k.label)}</button>`).join('')}</div></span>` : '',
       `<button class="act" data-act="del" data-id="${m.id}">Delete</button>`,
     ].join('');
-    const body = isUser ? `<div class="bubble">${esc(m.content)}</div>` : `<div class="bubble">${NX.md(m.content)}</div>`;
+    const body = isUser ? `<div class="bubble">${esc(meta.display || m.content)}</div>` : `<div class="bubble">${NX.md(m.content)}</div>`;
     const reasoning = !isUser && meta.reasoning
       ? `<details class="reasoning"><summary>Native reasoning · provider output, not the answer</summary><div class="reasoning-text">${esc(meta.reasoning)}</div></details>` : '';
     const truncated = !isUser && meta.finish_reason === 'length'
@@ -322,7 +325,7 @@
     await turn(`/api/chats/${S.chat.id}/messages`, content, text, firstTurn);
   }
 
-  async function turn(path, content, displayText, setTitle, regenerate) {
+  async function turn(path, content, displayText, setTitle, regenerate, display) {
     S.busy = true;
     $('#send').disabled = true;
     S.live = { text: '', tools: [], reasoning: '' };
@@ -347,7 +350,7 @@
     };
     let failed = null;
     try {
-      await NX.stream(path, regenerate ? {} : { content }, (ev, data) => {
+      await NX.stream(path, regenerate ? {} : (display ? { content, display } : { content }), (ev, data) => {
         if (ev === 'delta') { S.live.text += data.text; paint(); }
         else if (ev === 'reasoning') { S.live.reasoning += data.text; paint(); }
         else if (ev === 'tool') { S.live.tools.push(data); renderMessages(); }
@@ -375,6 +378,17 @@
     const last = S.chat.messages[S.chat.messages.length - 1];
     if (!last || last.role !== 'assistant') return NX.toast('nothing to regenerate', 'err');
     await turn(`/api/chats/${S.chat.id}/regenerate`, '', '', false, true);
+  }
+
+  /* Knack: sends the message body through a fixed prompt as the next user turn. Nothing else is changed. */
+  async function runKnack(id, mid) {
+    if (!S.chat) return;
+    if (S.busy) return NX.toast('Wait for the current reply', 'err');
+    const msg = (S.chat.messages || []).find((m) => m.id === mid);
+    const k = msg && NX.knackPrompt(id, msg.content);
+    if (!k) return;
+    const label = `${k.label}: ${msg.content.slice(0, 80)}`;
+    await turn(`/api/chats/${S.chat.id}/messages`, k.content, label, false, false, label);
   }
 
   async function messageAction(act, mid) {
@@ -471,9 +485,26 @@
       $('#messages').onclick = (e) => {
         const cp = e.target.closest('[data-copy]');
         if (cp) { navigator.clipboard.writeText(cp.closest('.code').querySelector('code').textContent); return NX.toast('Copied code', 'ok'); }
+        const kt = e.target.closest('[data-knack-toggle]');
+        if (kt) {
+          const menu = kt.parentElement.querySelector('.knack-menu');
+          const willOpen = menu.classList.contains('hidden');
+          document.querySelectorAll('.knack-menu').forEach((x) => x.classList.add('hidden'));
+          menu.classList.toggle('hidden', !willOpen);
+          return;
+        }
+        const kn = e.target.closest('[data-knack]');
+        if (kn) {
+          document.querySelectorAll('.knack-menu').forEach((x) => x.classList.add('hidden'));
+          runKnack(kn.dataset.knack, kn.dataset.id).catch((err) => NX.toast(err.message, 'err'));
+          return;
+        }
         const b = e.target.closest('[data-act]');
         if (b) messageAction(b.dataset.act, b.dataset.id).catch((err) => NX.toast(err.message, 'err'));
       };
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.knack-wrap')) document.querySelectorAll('.knack-menu').forEach((x) => x.classList.add('hidden'));
+      });
       $('#empty').onclick = (e) => {
         const s = e.target.closest('[data-suggest]');
         if (s) { $('#input').value = s.dataset.suggest; autosize(); $('#input').focus(); }

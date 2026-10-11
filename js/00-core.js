@@ -1,5 +1,5 @@
 /* NX core: single global namespace, API client, markdown, theme, dialogs.
-   Load order: 00-core, 10-chat, 20-panels, 30-settings, 90-boot. Plain scripts, no build step. */
+   Load order: 00-core, 05-knacks, 10-chat, 20-panels, 30-settings, 90-boot. Plain scripts, no build step. */
 (function () {
   'use strict';
   const NX = (window.NX = window.NX || {});
