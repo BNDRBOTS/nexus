@@ -226,8 +226,14 @@ def chat_stream(cfg, messages, tools=None, temperature=None, timeout=180):
         else:
             dec = SSEDecoder()
             done = False
+            deadline = time.monotonic() + timeout   # total wall-clock budget; socket timeout alone allows trickling
             while not done:
-                chunk = resp.read1(8192)
+                if time.monotonic() > deadline:
+                    raise ProviderError(f"stream exceeded {timeout}s total")
+                try:
+                    chunk = resp.read1(8192)
+                except OSError as e:
+                    raise ProviderError(f"stream read failed: {type(e).__name__}: {e}"[:200])
                 if not chunk:
                     break
                 for _, data in dec.feed(chunk):

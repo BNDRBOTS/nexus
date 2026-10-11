@@ -1,8 +1,11 @@
 """Unit tests: shared SSE decoder and completion accumulator (no network)."""
 import json
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from server.provider import ProviderError, SSEDecoder, _Acc, _frame
+from server.provider import ProviderError, SSEDecoder, _Acc, _frame, chat_stream
 
 
 class SSEDecoderTests(unittest.TestCase):
@@ -80,3 +83,39 @@ class AccTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Trickle(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            for _ in range(60):          # one byte every 0.1 s, never sends [DONE]
+                self.wfile.write(b": ka\n")
+                self.wfile.flush()
+                time.sleep(0.1)
+        except OSError:
+            pass
+
+
+class StreamDeadlineTests(unittest.TestCase):
+    def test_trickling_stream_hits_total_deadline(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _Trickle)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            cfg = {"base": f"http://127.0.0.1:{srv.server_address[1]}", "model": "m", "key": "",
+                   "headers": {}, "preset": "custom", "route": "custom"}
+            t0 = time.monotonic()
+            with self.assertRaises(ProviderError) as cm:
+                for _ in chat_stream(cfg, [{"role": "user", "content": "x"}], timeout=1):
+                    pass
+            self.assertIn("total", str(cm.exception))
+            self.assertLess(time.monotonic() - t0, 4.0)
+        finally:
+            srv.shutdown()
+            srv.server_close()
