@@ -20,7 +20,7 @@ python3 -m server.app          # http://0.0.0.0:8000
 Tests (end-to-end against a mock model and mock MCP server, plus unit tests for the stream decoder):
 
 ```bash
-python3 -m unittest tests.test_api tests.test_sse
+python3 -m unittest tests.test_api tests.test_sse tests.test_auth
 ```
 
 ## Configuration (env)
@@ -30,9 +30,10 @@ python3 -m unittest tests.test_api tests.test_sse
 | `NX_HOST` | `0.0.0.0` | bind address |
 | `NX_PORT` | `8000` | port |
 | `NX_DATA_DIR` | `./data` | SQLite store (`nexus.db`) |
-| `NX_TOKEN` | empty | if set, every `/api/*` call needs `Authorization: Bearer <token>` or `X-NX-Token` |
+| `NX_TOKEN` | generated | every `/api/*` call needs `Authorization: Bearer <token>` or `X-NX-Token`. If unset, the server creates `data/token` (random, mode 0600) on first start and uses it. Enter it in Settings → Data. |
+| `NX_ALLOW_OPEN` | off | `1` disables auth entirely. Local development only. |
 | `NX_GATEWAY_URL` / `NX_GATEWAY_KEY` / `NX_GATEWAY_MODEL` | empty | operator gateway route; key stays on server |
-| `NX_ENABLE_PYTHON` | off | `1` enables `python_run`. It runs host Python in a temp dir with `-I` and a 20 s timeout. It is not a sandbox. |
+| `NX_ENABLE_PYTHON` | off | `1` enables `python_run`. It runs host Python in a temp dir with `-I`, a 20 s timeout, a minimal environment (no server secrets), and rlimits (CPU, 768 MB address space, 10 MB file writes). It is not a filesystem sandbox: code can read any file the server user can read, including `data/`. Enable only on a single-owner host.
 
 Your own key: set in Settings → Model. It is kept in browser `localStorage` and sent as `X-NX-Provider-Key` per request. The server never stores or logs it.
 

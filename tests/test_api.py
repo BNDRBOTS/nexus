@@ -358,6 +358,44 @@ class NexusTests(unittest.TestCase):
         s, res = self.api.call("PUT", "/api/settings", {"provider": {"preset": "deepseek", "base_url": "https://api.deepseek.com"}})
         self.assertEqual(s, 200, res)
         self.assertEqual(res["provider"]["preset"], "deepseek")
+        # restore the mock route for later tests (no network in test runs)
+        s, res = self.api.call("PUT", "/api/settings", {"provider": {
+            "mode": "custom", "preset": "custom", "base_url": self.model_url + "/v1", "model": "mock-1",
+            "thinking": None, "reasoning_effort": None}})
+        self.assertEqual(s, 200, res)
+
+    def test_20_project_isolation(self):
+        s, other = self.api.call("POST", "/api/doc/project", {"name": "Other Client", "instructions": ""})
+        self.assertEqual(s, 201)
+        s, _ = self.api.call("PUT", "/api/files", {"project": other["id"], "path": "other.md",
+                                                  "content": "Other client secret OTHER-SECRET-42."})
+        self.assertEqual(s, 200)
+        s, _ = self.api.call("PUT", f"/api/doc/project/{other['id']}", {
+            "name": "Other Client", "instructions": "", "scope": ["other.md"],
+            "status": {"state": "active", "note": "", "next_step": ""}})
+        self.assertEqual(s, 200)
+        s, chat_a = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "research"})
+        self.assertEqual(s, 201)
+        s, res = self.api.call("POST", f"/api/chats/{chat_a['id']}/messages", {"content": "SEARCH:OTHER-SECRET-42"})
+        self.assertEqual(s, 200, res)
+        last = [m for m in M._Model.seen[-1]["body"]["messages"] if m["role"] == "tool"]
+        self.assertTrue(all("OTHER-SECRET-42" not in m["content"] for m in last))
+        s, ctx = self.api.call("GET", f"/api/chats/{chat_a['id']}/context")
+        self.assertEqual(ctx["snapshot"]["scope"], ["notes/source.md"])
+        s, chat_b = self.api.call("POST", "/api/chats", {"project_id": other["id"], "mode": "research"})
+        s, _ = self.api.call("POST", f"/api/chats/{chat_b['id']}/messages", {"content": "SEARCH:77-ALPHA"})
+        last = [m for m in M._Model.seen[-1]["body"]["messages"] if m["role"] == "tool"]
+        self.assertTrue(all("77-ALPHA" not in m["content"] for m in last))
+
+    def test_21_python_sees_no_server_secrets(self):
+        s, res = self.api.call("POST", "/api/python", {"project_id": NexusTests.project_id, "code":
+                               "import os\nprint('tok=', os.environ.get('NX_TOKEN'), os.environ.get('NX_GATEWAY_KEY'))"})
+        self.assertEqual(s, 200, res)
+        self.assertIn("tok= None None", res["output"])
+        s, res = self.api.call("POST", "/api/python", {"project_id": NexusTests.project_id, "code":
+                               "x = 'a' * (900 << 20)\nprint('alloc ok')"})
+        self.assertEqual(s, 200, res)
+        self.assertFalse(res["ok"])
 
 
 if __name__ == "__main__":

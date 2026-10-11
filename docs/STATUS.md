@@ -15,7 +15,7 @@ Version 2.0.0. Branch `arena/fceba36e-nexus`.
 | 6 | Context Snapshot, Backup, Model Status | done | `engine.context_preview`, `store.export_all/restore`, `provider.status` | none |
 | 7 | Loop: open project → context → work → save → preserve → resume | partial | chat persistence, `start_run` / `_execute_run` | resume after restart not tested |
 | 8 | MCP usage | partial | `server/mcp.py` Streamable HTTP (JSON + SSE) | stdio out of scope |
-| 9 | Python tooling | partial | `tools.run_python` (`python -I`, temp dir, 20 s) | not a security sandbox; gated by `NX_ENABLE_PYTHON=1` |
+| 9 | Python tooling | partial | `tools.run_python` (`python -I`, temp dir, 20 s, minimal env, rlimits) | not a filesystem sandbox; off unless `NX_ENABLE_PYTHON=1` |
 | 10 | Canvas connect | partial | `js/20-panels.js` canvas panel | connection to project files not verified |
 | 11 | Plugins / skills / skill maker | partial | skill IDs on chats and drafts | no skill maker, no plugin loader |
 | 12 | System prompt + chat prompt | partial | global `system_prompt`, roles | per-chat prompt path not verified |
@@ -47,13 +47,14 @@ Not built: per-model capability discovery (OpenRouter `/models`), cost or pricin
 
 ## Known risks
 
-- The preview on port 8000 runs with no `NX_TOKEN`. The API is open to anyone who can reach it. Set `NX_TOKEN` before sharing the preview.
-- `NX_ENABLE_PYTHON=1` enables code execution in the host process tree. Keep disabled on shared hosts.
+- Auth: token required by default (`NX_TOKEN` or generated `data/token`). `NX_ALLOW_OPEN=1` removes it; do not set on a reachable host.
+- Project isolation is logical, not multi-tenant. Any holder of the token can read every project through `/api/files` and `/api/doc`. Tools and model context are bound server-side to the chat's project (tested: test_08, test_20).
+- `NX_ENABLE_PYTHON=1` runs model-written code on the host as the server user. It can read host files, including `data/nexus.db` and `data/token`. Keep disabled unless the host is single-owner.
 - Branch overwrite request is pending user confirmation. No force-push or reset has been performed.
 
 ## Verification
 
-- `python3 -m unittest tests.test_api tests.test_sse`: 32 tests OK.
+- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 37 tests OK.
 - `pyflakes server tests`: clean.
 - `node --check js/*.js`: clean.
 - Live provider calls: not run (no credentials in sandbox). Behaviour checked against mock OpenAI-compatible server only.

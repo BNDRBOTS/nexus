@@ -1,6 +1,6 @@
 # Nexus HTTP API
 
-Base: `http(s)://<host>:<port>`. JSON bodies. All `/api/*` routes need `Authorization: Bearer <NX_TOKEN>` (or `X-NX-Token`) when `NX_TOKEN` is set.
+Base: `http(s)://<host>:<port>`. JSON bodies. All `/api/*` routes need `Authorization: Bearer <token>` (or `X-NX-Token`). Token = `NX_TOKEN`, else the value in `DATA_DIR/token` (created 0600 on first start). `NX_ALLOW_OPEN=1` disables auth (local dev only). Static UI files are served without a token.
 Custom-route model key: header `X-NX-Provider-Key` (per request, never stored).
 
 Errors: `{"error": "<message>"}` with status
@@ -88,7 +88,7 @@ Paths are normalized relative paths. Traversal is rejected. Max 2,000,000 chars 
 |---|---|---|
 | POST | `/api/workflows/{id}/run` | `{"input", "project_id"}` → 202 run record (`status: queued`) |
 | GET | `/api/runs/{id}` | `{id, workflow_id, project_id, status: queued|running|done|failed, steps[], error, ended}` |
-| POST | `/api/python` | `{"project_id", "code"}` → `{ok, output, summary}`. Requires `NX_ENABLE_PYTHON=1`. |
+| POST | `/api/python` | `{"project_id", "code"}` → `{ok, output, summary}`. Requires `NX_ENABLE_PYTHON=1` (off by default). Child process gets a minimal environment and rlimits; no server secrets in env. Not a filesystem sandbox. |
 | POST | `/api/mcp/{id}/probe` | `{ok, tools[]}` or `{ok:false, error}` |
 
 Provider contract (checked against provider docs, 2026-10): DeepSeek sends `thinking` and `reasoning_effort` only when set. When a request carries `tools`, prior `reasoning_content` is sent back; otherwise it is stripped. OpenRouter sends `reasoning: {effort}` only when set. Z.ai and custom endpoints get no provider-specific fields.

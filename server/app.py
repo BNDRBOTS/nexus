@@ -1,8 +1,9 @@
 """HTTP server (stdlib only). Serves the UI and the JSON/SSE API.
 
 Run:  python3 -m server.app          (from repo root)
-Env:  NX_HOST NX_PORT NX_DATA_DIR NX_TOKEN NX_GATEWAY_URL NX_GATEWAY_KEY NX_GATEWAY_MODEL NX_ENABLE_PYTHON
-Auth: if NX_TOKEN is set, every /api/* call needs  Authorization: Bearer <token>  (or X-NX-Token).
+Env:  NX_HOST NX_PORT NX_DATA_DIR NX_TOKEN NX_ALLOW_OPEN NX_GATEWAY_URL NX_GATEWAY_KEY NX_GATEWAY_MODEL NX_ENABLE_PYTHON
+Auth: every /api/* call needs  Authorization: Bearer <token>  (or X-NX-Token). Token = NX_TOKEN, else
+      DATA_DIR/token (created 0600 on first start). NX_ALLOW_OPEN=1 disables auth (local dev only).
 Provider key (custom route): header X-NX-Provider-Key. Never stored, never logged.
 """
 import hmac
@@ -10,6 +11,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -492,12 +494,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": f"{type(e).__name__}: {e}"})
 
 
+TOKEN_FILE_MIN = 32
+
+
+def _load_or_create_token():
+    """Token for the API. NX_TOKEN wins; otherwise DATA_DIR/token (0600) is read, or created on first start."""
+    path = C.DATA_DIR / "token"
+    C.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        tok = path.read_text(encoding="utf-8").strip()
+        if len(tok) >= TOKEN_FILE_MIN:
+            return tok
+    tok = secrets.token_urlsafe(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(tok + "\n")
+    os.chmod(path, 0o600)
+    return tok
+
+
 def main():
     store.init()
-    if C.TOKEN == "":
-        print("[nexus] NX_TOKEN not set: API is open to anyone who can reach this port.", file=sys.stderr)
-    if C.GATEWAY["url"] and not C.TOKEN:
-        print("[nexus] gateway key is configured and API is open: set NX_TOKEN before exposing this port.",
+    if not C.TOKEN and not C.ALLOW_OPEN:
+        C.TOKEN = _load_or_create_token()
+        print(f"[nexus] auth on: token in {C.DATA_DIR / 'token'} (set NX_TOKEN to override)", file=sys.stderr)
+    elif not C.TOKEN:
+        print("[nexus] NX_ALLOW_OPEN=1: API is open to anyone who can reach this port. Local use only.",
               file=sys.stderr)
     httpd = ThreadingHTTPServer((C.HOST, C.PORT), Handler)
     print(f"[nexus] v{C.VERSION} on http://{C.HOST}:{C.PORT}  db={store.db_path()}", file=sys.stderr)

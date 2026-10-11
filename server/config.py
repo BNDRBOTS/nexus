@@ -11,7 +11,8 @@ PORT = int(ENV.get("NX_PORT", "8000"))
 DATA_DIR = pathlib.Path(ENV.get("NX_DATA_DIR", ROOT / "data"))
 DB_PATH = DATA_DIR / "nexus.db"
 
-TOKEN = ENV.get("NX_TOKEN", "")                       # empty = open (local use only)
+TOKEN = ENV.get("NX_TOKEN", "")                       # empty: app.main() loads or creates DATA_DIR/token
+ALLOW_OPEN = ENV.get("NX_ALLOW_OPEN") == "1"          # explicit opt-out: unauthenticated API (local dev only)
 GATEWAY = {                                            # "Use mine (paid)" route; key never leaves the server
     "url": ENV.get("NX_GATEWAY_URL", ""),
     "key": ENV.get("NX_GATEWAY_KEY", ""),

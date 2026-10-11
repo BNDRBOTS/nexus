@@ -159,6 +159,19 @@ def _walk(root):
     return seen
 
 
+_PY_BOOT = (
+    "import resource, sys\n"
+    "_t = int(sys.argv[1])\n"
+    "for _lim, _val in ((resource.RLIMIT_CPU, _t + 5), (resource.RLIMIT_AS, 768 << 20),\n"
+    "                   (resource.RLIMIT_FSIZE, 10 << 20), (resource.RLIMIT_NOFILE, 64)):\n"
+    "    try:\n"
+    "        resource.setrlimit(_lim, (_val, _val))\n"
+    "    except (ValueError, OSError):\n"
+    "        pass\n"
+    "exec(compile(sys.stdin.read(), '<nexus>', 'exec'), {'__name__': '__main__'})\n"
+)
+
+
 def run_python(code, project_id, scope, chat_id=None, timeout=20):
     if not C.PYTHON_ENABLED:
         raise ToolError("python disabled (start server with NX_ENABLE_PYTHON=1)")
@@ -174,8 +187,11 @@ def run_python(code, project_id, scope, chat_id=None, timeout=20):
                     fh.write(f["content"])
         before = _walk(d)
         try:
-            proc = subprocess.run([sys.executable, "-I", "-"], input=code, cwd=d, capture_output=True,
-                                  text=True, timeout=timeout)
+            # Minimal env (no NX_TOKEN / NX_GATEWAY_KEY), isolated mode, rlimits applied in-process.
+            # NOT a filesystem sandbox: code can still read host files the server user can read.
+            proc = subprocess.run([sys.executable, "-I", "-c", _PY_BOOT, str(int(timeout))], input=code, cwd=d,
+                                  capture_output=True, text=True, timeout=timeout + 5,
+                                  env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PYTHONIOENCODING": "utf-8"})
             rc, out, err = proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired:
             rc, out, err = -1, "", f"timed out after {timeout}s"
