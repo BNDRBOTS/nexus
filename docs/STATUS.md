@@ -13,7 +13,7 @@ Version 2.0.0. Branch `arena/fceba36e-nexus`.
 | 4 | Source Scope (selected files + permitted retrieval tools only) | done | `tools.retrieve`, `context.build` scope | keyword scoring only, no embeddings |
 | 5 | Action Record (saved messages, executed tool results) | done | `store.action` (append-only triggers), `tool.executed` | no UI filter |
 | 6 | Context Snapshot, Backup, Model Status | done | `engine.context_preview`, `store.export_all/restore`, `provider.status` | none |
-| 7 | Loop: open project → context → work → save → preserve → resume | partial | chat persistence, `start_run` / `_execute_run` | resume after restart not tested |
+| 7 | Loop: open project → context → work → save → preserve → resume | partial | project status and next step injected into every chat's context (test_22); Continue button; `start_run` | resume across server restarts not tested; no UI test |
 | 8 | MCP usage | partial | `server/mcp.py` Streamable HTTP (JSON + SSE) | stdio out of scope |
 | 9 | Python tooling | partial | `tools.run_python` (`python -I`, temp dir, 20 s, minimal env, rlimits) | not a filesystem sandbox; off unless `NX_ENABLE_PYTHON=1` |
 | 10 | Canvas connect | partial | `js/20-panels.js` canvas panel | connection to project files not verified |
@@ -56,7 +56,7 @@ Not built: per-model capability discovery (OpenRouter `/api/v1/models` `supporte
 
 ## Verification
 
-- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 39 tests OK.
+- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 40 tests OK (`test_api` 22, `test_sse` 16, `test_auth` 2).
 - `pyflakes server tests`: clean.
 - `node --check js/*.js`: clean.
 - Live provider calls: not run (no credentials in sandbox). Behaviour checked against mock OpenAI-compatible server only.

@@ -397,6 +397,20 @@ class NexusTests(unittest.TestCase):
         self.assertEqual(s, 200, res)
         self.assertFalse(res["ok"])
 
+    def test_22_resume_across_chats(self):
+        s, _ = self.api.call("PUT", f"/api/doc/project/{NexusTests.project_id}", {
+            "name": "Vault Study", "instructions": "Track facts.", "scope": ["notes/source.md"],
+            "status": {"state": "paused", "note": "section 1 saved", "next_step": "Draft section 2 from notes/source.md"}})
+        self.assertEqual(s, 200)
+        s, chat = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "work"})
+        self.assertEqual(s, 201)
+        s, ctx = self.api.call("GET", f"/api/chats/{chat['id']}/context")
+        self.assertEqual(s, 200)
+        blob = "\n".join(m["content"] for m in ctx["messages"] if m["role"] == "system")
+        self.assertIn("Next step: Draft section 2 from notes/source.md", blob)
+        self.assertIn("Track facts.", blob)
+        self.assertEqual(ctx["snapshot"]["scope"], ["notes/source.md"])
+
 
 if __name__ == "__main__":
     unittest.main()
