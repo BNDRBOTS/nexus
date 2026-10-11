@@ -12,7 +12,7 @@ Errors: `{"error": "<message>"}` with status
 |---|---|---|
 | GET | `/api/state` | `version, modes, tool_groups, inbox, settings, projects, chats[], roles, skills, workflows, mcp, python_enabled, gateway_configured, token_required` |
 | GET | `/api/status?probe=1` | `provider{route,model,reachable,latency_ms,error}, mcp[], python_enabled, version, db{path,docs,files,actions}` |
-| PUT | `/api/settings` | merged settings. Keys: `system_prompt, context_chars, provider{mode,base_url,model,temperature}, theme{preset,accent,bg,surface,text,radius,font_scale}` |
+| PUT | `/api/settings` | merged settings. Keys: `system_prompt, context_chars (>=1000), provider{mode, preset, base_url, model, temperature, thinking, reasoning_effort}, theme{...}`. `preset` is one of deepseek, zai, openrouter, custom. `thinking` is null, enabled or disabled (DeepSeek). `reasoning_effort` is a per-preset list (see `provider_presets` in `/api/state`). Invalid values return 400. |
 | GET | `/api/actions?project=&chat=&limit=` | `{actions[]}` newest first. Each: `id, ts, project_id, chat_id, type, ref, payload` |
 | GET | `/api/backup` | full JSON export |
 | POST | `/api/restore` | body = backup export; replaces all data; records `backup.restored` |
@@ -39,7 +39,9 @@ Role: `name, title, system_prompt`. Skill: `name, instructions`. MCP: `name, url
 | DELETE | `/api/chats/{id}` | record keeps the deletion |
 | GET | `/api/chats/{id}/context` | `{messages[], snapshot{hash, blocks[{tag,chars}], history{included,dropped}, reminder, chars, tokens_est, budget_chars, scope[], retrieved[], tools[]}}`. Exact payload that would be sent. |
 
-Message object: `id, role (user|assistant), content, pinned, meta{tools[{name,ok,summary}], saved[], model, ms, ctx_hash}`.
+Message object: `id, role (user|assistant), content, pinned, meta{tools[{name,ok,summary}], saved[], model, route, preset, ms, ctx_hash, reasoning (native, separate from content), finish_reason, usage (null when provider sent none)}`.
+
+Truncation: if the provider stops on `finish_reason=length` with no visible text, the turn fails (502, `turn.error` record) and no empty assistant row is saved.
 
 ### Send a turn
 
@@ -48,7 +50,8 @@ Message object: `id, role (user|assistant), content, pinned, meta{tools[{name,ok
 - JSON (default): `200 {assistant, context}`.
 - SSE: add `"stream": true` or `?stream=1`. Events in order:
   - `context` `{hash, tokens_est, dropped, tools}`
-  - `delta` `{text}` (repeated)
+  - `delta` `{text}` (repeated). Visible answer only.
+  - `reasoning` `{text}` (repeated). Native provider reasoning (DeepSeek `reasoning_content`, OpenRouter `reasoning`). Never mixed into `delta`.
   - `tool` `{name, ok, summary}` (per tool call)
   - `done` `{assistant, context}` or `error` `{status, error}`
 
@@ -87,6 +90,8 @@ Paths are normalized relative paths. Traversal is rejected. Max 2,000,000 chars 
 | GET | `/api/runs/{id}` | `{id, workflow_id, project_id, status: queued|running|done|failed, steps[], error, ended}` |
 | POST | `/api/python` | `{"project_id", "code"}` → `{ok, output, summary}`. Requires `NX_ENABLE_PYTHON=1`. |
 | POST | `/api/mcp/{id}/probe` | `{ok, tools[]}` or `{ok:false, error}` |
+
+Provider contract (checked against provider docs, 2026-10): DeepSeek sends `thinking` and `reasoning_effort` only when set. When a request carries `tools`, prior `reasoning_content` is sent back; otherwise it is stripped. OpenRouter sends `reasoning: {effort}` only when set. Z.ai and custom endpoints get no provider-specific fields.
 
 Workflow step: `prompt` may contain `{{input}}` (run input) and `{{prev}}` (previous step output). `save_path` writes the step output to the project workspace. Each step appends a `workflow.step` record. On finish: `run.finished` record, and project `status` is updated with a summary.
 

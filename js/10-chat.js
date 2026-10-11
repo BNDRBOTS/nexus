@@ -53,7 +53,7 @@
       version: st.version, modes: st.modes, toolGroups: st.tool_groups, inbox: st.inbox, settings: st.settings,
       projects: st.projects, chats: st.chats, roles: st.roles, skills: st.skills, workflows: st.workflows,
       mcp: st.mcp, pythonEnabled: st.python_enabled, tokenRequired: st.token_required,
-      gatewayConfigured: st.gateway_configured,
+      gatewayConfigured: st.gateway_configured, providerPresets: st.provider_presets,
     });
     NX.theme.apply(S.settings.theme);
     if (S.chatId && !byId(S.chats, S.chatId)) { S.chatId = null; S.chat = null; }
@@ -183,7 +183,12 @@
       `<button class="act" data-act="del" data-id="${m.id}">Delete</button>`,
     ].join('');
     const body = isUser ? `<div class="bubble">${esc(m.content)}</div>` : `<div class="bubble">${NX.md(m.content)}</div>`;
+    const reasoning = !isUser && meta.reasoning
+      ? `<details class="reasoning"><summary>Native reasoning · provider output, not the answer</summary><div class="reasoning-text">${esc(meta.reasoning)}</div></details>` : '';
+    const truncated = !isUser && meta.finish_reason === 'length'
+      ? '<div class="notice">Reply truncated by the output limit (finish_reason=length).</div>' : '';
     return `<div class="msg ${m.role}" data-mid="${m.id}">
+      ${reasoning}${truncated}
       ${(pin || chips) ? `<div class="meta">${pin}${chips}</div>` : ''}
       ${body}
       <div class="msg-actions">${acts}</div></div>`;
@@ -226,6 +231,7 @@
     if (S.live) {
       html += `<div class="msg assistant" id="live"><div class="meta">${S.live.tools.map((t) =>
         `<span class="tool-chip ${t.ok ? 'ok' : 'bad'}">${esc(t.name)}</span>`).join('')}</div>
+        ${S.live.reasoning ? `<details class="reasoning" open><summary>Native reasoning · provider output, not the answer</summary><div class="reasoning-text">${esc(S.live.reasoning)}</div></details>` : ''}
         <div class="bubble">${S.live.text ? NX.md(S.live.text) : ''}<span class="caret"></span></div></div>`;
     }
     box.innerHTML = html;
@@ -319,7 +325,7 @@
   async function turn(path, content, displayText, setTitle, regenerate) {
     S.busy = true;
     $('#send').disabled = true;
-    S.live = { text: '', tools: [] };
+    S.live = { text: '', tools: [], reasoning: '' };
     if (!regenerate) {
       S.chat.messages = (S.chat.messages || []).concat([{ id: 'pending', role: 'user', content: displayText, meta: {} }]);
     } else {
@@ -333,6 +339,8 @@
         frame = 0;
         const el = document.querySelector('#live .bubble');
         if (el && S.live) el.innerHTML = (S.live.text ? NX.md(S.live.text) : '') + '<span class="caret"></span>';
+        const rt = document.querySelector('#live .reasoning-text');
+        if (rt && S.live) rt.textContent = S.live.reasoning;
         const stage = $('#stage');
         stage.scrollTop = stage.scrollHeight;
       });
@@ -341,6 +349,7 @@
     try {
       await NX.stream(path, regenerate ? {} : { content }, (ev, data) => {
         if (ev === 'delta') { S.live.text += data.text; paint(); }
+        else if (ev === 'reasoning') { S.live.reasoning += data.text; paint(); }
         else if (ev === 'tool') { S.live.tools.push(data); renderMessages(); }
         else if (ev === 'context') { S.ctx = data; }
         else if (ev === 'error') { failed = data.error; }

@@ -53,15 +53,34 @@ MODES = {
 
 TOOL_GROUPS = ["workspace", "status", "sources", "python", "mcp"]
 
+# Provider presets: defaults only. Every value here was checked against the provider's current docs.
+# openrouter has no default model: model IDs are user-supplied (discover via GET /api/v1/models).
+PROVIDER_PRESETS = {
+    "deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com", "model": "deepseek-flash",
+                 "thinking": True, "efforts": ["low", "high", "max"]},
+    "zai": {"label": "Z.ai (GLM)", "base_url": "https://api.z.ai/api/paas/v4", "model": "glm-5.3",
+            "thinking": False, "efforts": []},
+    "openrouter": {"label": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "model": "",
+                   "thinking": False, "efforts": ["minimal", "low", "medium", "high", "xhigh", "max", "none"],
+                   "headers": {"X-OpenRouter-Title": "Nexus"}},
+    "custom": {"label": "Custom OpenAI-compatible", "base_url": "", "model": "", "thinking": False, "efforts": []},
+}
+THINKING_MODES = (None, "enabled", "disabled")
+
+REASONING_EFFORTS = (None, "minimal", "low", "medium", "high", "xhigh", "max", "none")  # union; per-preset list in PROVIDER_PRESETS
+
 DEFAULT_SETTINGS = {
     "system_prompt": ("You are Nexus, an execution assistant. Be exact and complete. "
                       "Never claim work was saved or executed unless a tool result confirms it."),
     "context_chars": 48000,
     "provider": {
         "mode": "custom",                       # custom = user key from browser | gateway = server env key
-        "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "temperature": None,                    # None = use mode temperature
+        "preset": "deepseek",                   # see PROVIDER_PRESETS
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "temperature": None,                    # None = use mode temperature (ignored by DeepSeek thinking mode)
+        "thinking": None,                       # DeepSeek only: None (API default = enabled) | enabled | disabled
+        "reasoning_effort": None,               # None | minimal|low|medium|high|xhigh|max|none (API-specific)
     },
     "theme": {
         "preset": "graphite",

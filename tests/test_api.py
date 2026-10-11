@@ -301,5 +301,64 @@ class NexusTests(unittest.TestCase):
         self.assertTrue(res["ok"])
 
 
+    def test_17_reasoning_passback_and_separation(self):
+        # DeepSeek contract: with tools present, reasoning_content of the tool-loop turn is sent back.
+        s, chat = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "work"})
+        cid = chat["id"]
+        n0 = len(M._Model.seen)
+        s, res = self.api.call("POST", f"/api/chats/{cid}/messages", {"content": "THINK:plan the note"})
+        self.assertEqual(s, 200, res)
+        a = res["assistant"]
+        self.assertEqual(a["content"], "Done after think.")
+        self.assertNotIn("step one", a["content"])                    # reasoning never leaks into content
+        self.assertEqual(a["meta"]["reasoning"], "step one. step two.")
+        second = M._Model.seen[n0 + 1]["body"]
+        self.assertTrue(second.get("tools"), "tool specs must be present in the tool-loop continuation")
+        asst = [m for m in second["messages"] if m["role"] == "assistant" and m.get("tool_calls")]
+        self.assertEqual(len(asst), 1)
+        self.assertEqual(asst[0].get("reasoning_content"), "step one. step two.")
+        # Next turn with tools: prior turn's reasoning is passed back in history.
+        n1 = len(M._Model.seen)
+        s, res = self.api.call("POST", f"/api/chats/{cid}/messages", {"content": "ECHO:next"})
+        self.assertEqual(s, 200, res)
+        hist = [m for m in M._Model.seen[n1]["body"]["messages"] if m["role"] == "assistant" and m.get("content") == "Done after think."]
+        self.assertTrue(hist and hist[0].get("reasoning_content"), "history reasoning must be passed back with tools")
+        # Without tools: reasoning_content is stripped from the request body.
+        s, _ = self.api.call("PATCH", f"/api/chats/{cid}", {"tool_groups": []})
+        n2 = len(M._Model.seen)
+        s, res = self.api.call("POST", f"/api/chats/{cid}/messages", {"content": "ECHO:no tools"})
+        self.assertEqual(s, 200, res)
+        body = M._Model.seen[n2]["body"]
+        self.assertFalse(body.get("tools"))
+        self.assertFalse(any("reasoning_content" in m for m in body["messages"]))
+
+    def test_18_truncation_fails_loudly(self):
+        s, chat = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "work"})
+        cid = chat["id"]
+        s, before = self.api.call("GET", f"/api/chats/{cid}")
+        s, res = self.api.call("POST", f"/api/chats/{cid}/messages", {"content": "CUT:long answer"})
+        self.assertEqual(s, 502, res)
+        self.assertIn("finish_reason=length", res["error"])
+        s, after = self.api.call("GET", f"/api/chats/{cid}")
+        self.assertEqual(after["messages"][-1]["role"], "user")       # no empty assistant row persisted
+        self.assertEqual(len(after["messages"]), len(before["messages"]) + 1)
+
+    def test_19_provider_settings_validation(self):
+        s, res = self.api.call("PUT", "/api/settings", {"provider": {"preset": "nope"}})
+        self.assertEqual(s, 400)
+        s, res = self.api.call("PUT", "/api/settings", {"provider": {"thinking": "maybe"}})
+        self.assertEqual(s, 400)
+        s, res = self.api.call("PUT", "/api/settings", {"provider": {"reasoning_effort": "ultra"}})
+        self.assertEqual(s, 400)
+        s, res = self.api.call("PUT", "/api/settings", {"context_chars": 10})
+        self.assertEqual(s, 400)
+        s, res = self.api.call("PUT", "/api/settings", {"provider": {"preset": "openrouter", "thinking": None}})
+        self.assertEqual(s, 200, res)
+        self.assertEqual(res["provider"]["preset"], "openrouter")
+        s, res = self.api.call("PUT", "/api/settings", {"provider": {"preset": "deepseek", "base_url": "https://api.deepseek.com"}})
+        self.assertEqual(s, 200, res)
+        self.assertEqual(res["provider"]["preset"], "deepseek")
+
+
 if __name__ == "__main__":
     unittest.main()

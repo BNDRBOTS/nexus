@@ -65,6 +65,14 @@ def _text(s):
 
 def _script(last_user, after_tool, msgs, tools):
     names = {t["function"]["name"] for t in tools}
+    if last_user.startswith("THINK:"):
+        if after_tool:
+            return [_text("Done after think.")]
+        return [{"choices": [{"delta": {"reasoning_content": "step one. "}}]},
+                {"choices": [{"delta": {"reasoning_content": "step two."}}]},
+                _call("workspace_write", {"path": "think/out.md", "content": "thought"})]
+    if last_user.startswith("CUT:"):
+        return [{"choices": [{"delta": {"reasoning_content": "still thinking"}, "finish_reason": "length"}]}]
     if after_tool:
         return [_text("Done: " + msgs[-1]["content"][:120])]
     u = last_user

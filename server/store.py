@@ -139,6 +139,11 @@ def get_settings():
             base[k].update(v)
         else:
             base[k] = v
+    # Migration: the first build stored the retired DeepSeek defaults. Rewrite only that exact pair.
+    sp = (stored.get("provider") or {})
+    if sp.get("base_url") == "https://api.deepseek.com/v1" and sp.get("model") == "deepseek-chat":
+        base["provider"].update({"base_url": C.DEFAULT_SETTINGS["provider"]["base_url"],
+                                 "model": C.DEFAULT_SETTINGS["provider"]["model"], "preset": "deepseek"})
     return base
 
 

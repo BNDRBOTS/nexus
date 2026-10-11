@@ -92,12 +92,17 @@ def build(chat, project, settings, mode, role, query, skills=None):
         c = m["content"]
         if history and remaining - len(c) < 0:
             break
-        history.insert(0, {"tag": "history", "role": m["role"], "content": c, "id": m["id"]})
+        rc = (m.get("meta") or {}).get("reasoning") if m["role"] == "assistant" else None
+        history.insert(0, {"tag": "history", "role": m["role"], "content": c, "id": m["id"], "reasoning": rc})
         remaining -= len(c)
     dropped = sum(1 for m in msgs if m.get("role") in ("user", "assistant") and m.get("content")) - len(history)
 
     api_messages = [{"role": b["role"], "content": b["content"]} for b in blocks]
-    api_messages += [{"role": h["role"], "content": h["content"]} for h in history]
+    for h in history:
+        msg = {"role": h["role"], "content": h["content"]}
+        if h.get("reasoning"):
+            msg["reasoning_content"] = h["reasoning"]   # sent only when the request carries tools (provider.py)
+        api_messages.append(msg)
     api_messages += [{"role": t["role"], "content": t["content"]} for t in tail]
 
     total = sum(len(m["content"]) for m in api_messages)

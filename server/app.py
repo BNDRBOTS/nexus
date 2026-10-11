@@ -88,6 +88,8 @@ def state(req):
         "workflows": store.list_docs("workflow"), "mcp": store.list_docs("mcp"),
         "python_enabled": C.PYTHON_ENABLED, "gateway_configured": bool(C.GATEWAY["url"]),
         "token_required": bool(C.TOKEN),
+        "provider_presets": C.PROVIDER_PRESETS, "reasoning_efforts": C.REASONING_EFFORTS,
+        "thinking_modes": C.THINKING_MODES,
     }
 
 
@@ -121,8 +123,17 @@ def put_settings(req):
             cur[k].update(v)
         else:
             cur[k] = v
-    if cur["provider"]["mode"] not in ("custom", "gateway"):
+    prov = cur["provider"]
+    if prov["mode"] not in ("custom", "gateway"):
         raise HttpError(400, "provider.mode must be custom|gateway")
+    if prov.get("preset") not in C.PROVIDER_PRESETS:
+        raise HttpError(400, f"provider.preset must be one of {sorted(C.PROVIDER_PRESETS)}")
+    if prov.get("thinking") not in C.THINKING_MODES:
+        raise HttpError(400, "provider.thinking must be null|enabled|disabled")
+    if prov.get("reasoning_effort") not in C.REASONING_EFFORTS:
+        raise HttpError(400, f"provider.reasoning_effort must be one of {list(C.REASONING_EFFORTS)}")
+    if not isinstance(cur.get("context_chars"), int) or cur["context_chars"] < 1000:
+        raise HttpError(400, "context_chars must be an integer >= 1000")
     store.put_doc("setting", "app", cur)
     return 200, store.get_settings()
 

@@ -69,36 +69,67 @@
   function modelSec(root) {
     const st = S.settings;
     const p = st.provider;
+    const presets = S.providerPresets || {};
+    const preset = presets[p.preset] ? p.preset : 'custom';
+    const info = presets[preset] || {};
     const keyNote = p.mode === 'gateway'
       ? (S.gatewayConfigured ? 'Operator gateway key is configured on the server.' : 'No gateway key on server (NX_GATEWAY_KEY unset).')
-      : 'Your key is kept in this browser only and sent per request.';
+      : 'Your key is kept in this browser only and sent per request. Never stored on the server.';
+    const efforts = info.efforts || [];
     root.innerHTML = `
       <h3>Model route</h3>
       <div class="seg" id="route">
-        <button data-r="custom" class="${p.mode === 'custom' ? 'on' : ''}">Custom endpoint / your key</button>
+        <button data-r="custom" class="${p.mode === 'custom' ? 'on' : ''}">Your key</button>
         <button data-r="gateway" class="${p.mode === 'gateway' ? 'on' : ''}">Operator gateway</button>
       </div>
+      <div class="field"><label>Provider</label>
+        <select id="pPreset" class="select">${Object.entries(presets).map(([k, v]) =>
+          `<option value="${k}" ${k === preset ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select>
+        <div class="muted" id="pPresetNote">Preset fills base URL and model. Edit them below if needed.</div></div>
       <div class="field"><label>Base URL (OpenAI-compatible)</label><input id="pBase" class="input" value="${esc(p.base_url)}"></div>
-      <div class="field"><label>Model</label><input id="pModel" class="input" value="${esc(p.model)}"></div>
-      <div class="field"><label>Temperature (blank = mode default)</label><input id="pTemp" class="input" type="number" step="0.1" min="0" max="2" value="${p.temperature == null ? '' : p.temperature}"></div>
-      <div class="field"><label>API key (this browser only)</label><input id="pKey" class="input" type="password" autocomplete="off" value="${esc(NX.auth.providerKey())}" placeholder="sk-...">
+      <div class="field"><label>Model</label><input id="pModel" class="input" value="${esc(p.model)}"
+        placeholder="${preset === 'openrouter' ? 'e.g. a model id from openrouter.ai/models' : ''}"></div>
+      <div class="field" id="thinkField" ${info.thinking ? '' : 'hidden'}><label>Thinking (DeepSeek)</label>
+        <select id="pThink" class="select">
+          <option value="" ${!p.thinking ? 'selected' : ''}>API default (enabled)</option>
+          <option value="enabled" ${p.thinking === 'enabled' ? 'selected' : ''}>enabled</option>
+          <option value="disabled" ${p.thinking === 'disabled' ? 'selected' : ''}>disabled</option></select></div>
+      <div class="field" id="effortField" ${efforts.length ? '' : 'hidden'}><label>Reasoning effort</label>
+        <select id="pEffort" class="select"><option value="">provider default</option>${efforts.map((e) =>
+          `<option value="${e}" ${p.reasoning_effort === e ? 'selected' : ''}>${e}</option>`).join('')}</select></div>
+      <div class="field"><label>Temperature (blank = mode default; ignored by DeepSeek thinking mode)</label>
+        <input id="pTemp" class="input" type="number" step="0.1" min="0" max="2" value="${p.temperature == null ? '' : p.temperature}"></div>
+      <div class="field"><label>API key (this browser only)</label><input id="pKey" class="input" type="password" autocomplete="off" value="${esc(NX.auth.providerKey())}" placeholder="API key">
         <div class="muted">${esc(keyNote)}</div></div>
       <h3>Behavior</h3>
       <div class="field"><label>Global system prompt</label><textarea id="pSys" class="textarea">${esc(st.system_prompt)}</textarea></div>
-      <div class="field"><label>Context budget (chars)</label><input id="pBudget" class="input" type="number" min="4000" step="1000" value="${st.context_chars}"></div>
+      <div class="field"><label>Context budget (chars)</label><input id="pBudget" class="input" type="number" min="1000" step="1000" value="${st.context_chars}"></div>
       <div class="row"><button class="btn primary" id="pSave">Save model settings</button><span class="spacer"></span><button class="btn ghost" id="pTest">Test connection</button></div>`;
     let route = p.mode;
     root.querySelectorAll('#route [data-r]').forEach((b) => b.onclick = () => {
       route = b.dataset.r;
       root.querySelectorAll('#route [data-r]').forEach((x) => x.classList.toggle('on', x === b));
     });
+    $('#pPreset', root).onchange = (e) => {
+      const pr = presets[e.target.value] || {};
+      $('#pBase', root).value = pr.base_url || '';
+      $('#pModel', root).value = pr.model || '';
+      $('#thinkField', root).hidden = !pr.thinking;
+      const eff = pr.efforts || [];
+      $('#effortField', root).hidden = !eff.length;
+      $('#pEffort', root).innerHTML = '<option value="">provider default</option>' + eff.map((x) => `<option value="${x}">${x}</option>`).join('');
+    };
     $('#pSave', root).onclick = async () => {
       const temp = $('#pTemp', root).value;
+      const presetNow = $('#pPreset', root).value;
+      const pr = presets[presetNow] || {};
       try {
         S.settings = await NX.api('PUT', '/api/settings', {
           system_prompt: $('#pSys', root).value,
           context_chars: +$('#pBudget', root).value,
-          provider: { mode: route, base_url: $('#pBase', root).value.trim(), model: $('#pModel', root).value.trim(),
+          provider: { mode: route, preset: presetNow, base_url: $('#pBase', root).value.trim(), model: $('#pModel', root).value.trim(),
+            thinking: pr.thinking ? ($('#pThink', root).value || null) : null,
+            reasoning_effort: (pr.efforts || []).length ? ($('#pEffort', root).value || null) : null,
             temperature: temp === '' ? null : +temp },
         });
         localStorage.setItem('nx.providerKey', $('#pKey', root).value.trim());

@@ -281,3 +281,9 @@ kbd { font-family: var(--mono); font-size: 11px; opacity: .6; margin-left: 6px; 
   .settings-grid { grid-template-columns: 1fr; }
   .grid2 { grid-template-columns: 1fr; }
 }
+
+.reasoning { margin: 0 0 8px; border: 1px dashed var(--line-2); border-radius: 10px; padding: 6px 10px; color: var(--muted); font-size: 13px; }
+.reasoning summary { cursor: pointer; }
+.reasoning-text { white-space: pre-wrap; margin-top: 6px; font-family: var(--mono); font-size: 12px; max-height: 240px; overflow: auto; }
+.notice { font-size: 12.5px; color: #fbbf24; margin-bottom: 6px; }
+[hidden] { display: none !important; }

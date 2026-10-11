@@ -71,24 +71,38 @@ def new_message(role, content, meta=None):
 
 
 def _complete(cfg, messages, specs, routes, ctx, temperature, emit=None):
-    """Tool loop. Returns (final_text, tool_log, rounds)."""
-    tool_log = []
-    text = ""
+    """Tool loop. Returns (final_text, tool_log, rounds, reasoning, meta).
+    reasoning = native reasoning of all rounds, joined (kept separate from content).
+    Within a tool loop every round's reasoning_content is sent back (DeepSeek requires it when tools are present)."""
+    tool_log, all_reasoning = [], []
+    text, meta = "", {}
     for rnd in range(1, C.MAX_ROUNDS + 1):
         final = None
         for kind, val in P.chat_stream(cfg, messages, specs or None, temperature):
             if kind == "delta":
                 if emit:
                     emit("delta", {"text": val})
+            elif kind == "reasoning":
+                if emit:
+                    emit("reasoning", {"text": val})
             else:
                 final = val
-        text = final["content"]
+        text, reasoning = final["content"], final["reasoning"]
+        if reasoning:
+            all_reasoning.append(reasoning)
         calls = final["tool_calls"]
+        meta = {"finish_reason": final["finish_reason"], "usage": final["usage"]}
         if not calls:
-            return text, tool_log, rnd
-        messages.append({"role": "assistant", "content": text or None, "tool_calls": [
+            if final["finish_reason"] == "length" and not text.strip():
+                raise P.ProviderError("reply cut off by max_tokens before any visible content "
+                                      "(finish_reason=length); raise the output limit or lower reasoning effort")
+            return text, tool_log, rnd, "\n".join(all_reasoning), meta
+        msg = {"role": "assistant", "content": text or None, "tool_calls": [
             {"id": c["id"] or store.new_id("call"), "type": "function",
-             "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}} for c in calls]})
+             "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}} for c in calls]}
+        if reasoning:
+            msg["reasoning_content"] = reasoning
+        messages.append(msg)
         for c in calls:
             cid = c["id"] or store.new_id("call")
             args = T.parse_args(c["arguments"])
@@ -102,7 +116,8 @@ def _complete(cfg, messages, specs, routes, ctx, temperature, emit=None):
             if emit:
                 emit("tool", entry)
             messages.append({"role": "tool", "tool_call_id": cid, "content": res["output"][:C.TOOL_OUTPUT_CAP]})
-    return (text or "") + "\n\n[stopped: tool round limit reached]", tool_log, C.MAX_ROUNDS
+    return ((text or "") + "\n\n[stopped: tool round limit reached]", tool_log, C.MAX_ROUNDS,
+            "\n".join(all_reasoning), meta)
 
 
 def _tool_ctx(project, chat_id):
@@ -152,8 +167,8 @@ def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None):
             if emit:
                 emit("context", {"hash": snap["hash"], "tokens_est": snap["tokens_est"],
                                  "dropped": snap["history"]["dropped"], "tools": snap["tools"]})
-            reply, tool_log, rounds = _complete(cfg, messages, specs, routes,
-                                                _tool_ctx(project, chat_id), temp, emit)
+            reply, tool_log, rounds, reasoning, fmeta = _complete(cfg, messages, specs, routes,
+                                                                  _tool_ctx(project, chat_id), temp, emit)
         except (P.ProviderError, EngineError) as e:
             store.add_action("turn.error", chat_id, {"error": str(e)[:500], "regenerate": regenerate},
                              project_id=chat.get("project_id"), chat_id=chat_id)
@@ -167,8 +182,10 @@ def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None):
                                                               "content": old["content"]},
                              project_id=chat.get("project_id"), chat_id=chat_id)
         am = new_message("assistant", reply, {"ctx_hash": snap["hash"], "model": cfg["model"],
-                                              "route": cfg["route"], "mode": chat.get("mode", "work"),
-                                              "tools": tool_log, "rounds": rounds,
+                                              "route": cfg["route"], "preset": cfg.get("preset"),
+                                              "mode": chat.get("mode", "work"), "tools": tool_log, "rounds": rounds,
+                                              "reasoning": reasoning, "finish_reason": fmeta.get("finish_reason"),
+                                              "usage": fmeta.get("usage"),
                                               "ms": int((time.time() - t0) * 1000), "saved": []})
         chat["messages"].append(am)
         store.put_chat(chat)
@@ -271,8 +288,8 @@ def _execute_run(run_id, wf, input_text, provider_key):
             prompt = _fill(step["prompt"], {"input": input_text, "prev": prev})
             msgs, snap = X.build(pseudo, project_, st, mode_, role, prompt + "\n" + input_text, skills)
             msgs.append({"role": "user", "content": prompt})
-            reply, tool_log, rounds = _complete(cfg, msgs, specs, routes,
-                                                _tool_ctx(project_, None), temp)
+            reply, tool_log, rounds, _reasoning, _fmeta = _complete(cfg, msgs, specs, routes,
+                                                                    _tool_ctx(project_, None), temp)
             entry = {"index": i, "step_id": step.get("id", str(i)), "status": "done", "chars": len(reply),
                      "hash": _h(reply), "ctx_hash": snap["hash"], "tools": len(tool_log), "saved": None}
             if step.get("save_path"):

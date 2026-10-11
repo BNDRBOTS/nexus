@@ -9,7 +9,7 @@ Lightweight AI workspace. One Python process (stdlib only) serves the API and th
 - **Context snapshot**: exact message list sent for a chat, with block sizes, dropped history, scope, retrieval, hash.
 - **Workflows**: ordered steps run server-side. Trigger from the UI or over HTTP.
 - **MCP**: Streamable HTTP servers; tools appear as `mcp_<server>_<tool>`.
-- **Model route**: your own OpenAI-compatible key (per request, browser-held) or an operator gateway (server key).
+- **Model route**: presets for DeepSeek, Z.ai, OpenRouter, or any OpenAI-compatible endpoint. Your own key (per request, browser-held) or an operator gateway (server key). Native reasoning is stored and shown separately from the answer.
 
 ## Run
 
@@ -17,10 +17,10 @@ Lightweight AI workspace. One Python process (stdlib only) serves the API and th
 python3 -m server.app          # http://0.0.0.0:8000
 ```
 
-Tests (starts the real server against a mock model and mock MCP server):
+Tests (end-to-end against a mock model and mock MCP server, plus unit tests for the stream decoder):
 
 ```bash
-python3 -m unittest tests.test_api
+python3 -m unittest tests.test_api tests.test_sse
 ```
 
 ## Configuration (env)
@@ -42,7 +42,7 @@ Your own key: set in Settings → Model. It is kept in browser `localStorage` an
 server/
   config.py    constants, MODES, TOOL_GROUPS, DEFAULT_SETTINGS, DEFAULT_ROLES, env
   store.py     SQLite: doc, file, action (append-only triggers), backup/restore
-  provider.py  model route resolve, streaming chat, status probe
+  provider.py  presets, route resolve, byte-safe SSE decoder, streaming chat, status probe
   mcp.py       Streamable HTTP MCP client
   tools.py     tool specs per mode, execute(), retrieval over Source Scope, python_run
   context.py   context builder + snapshot (single source of the sent message list)
@@ -56,7 +56,7 @@ js/
   90-boot.js   status pill, routing (#chat=<id>), shortcuts, startup
 css/app.css    all styles; tokens are CSS variables (see theme)
 index.html     shell; loads js/* in order
-tests/         mock_servers.py, test_api.py
+tests/         mock_servers.py, test_api.py (end-to-end), test_sse.py (unit)
 docs/API.md    HTTP contract
 ```
 
