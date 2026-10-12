@@ -25,6 +25,7 @@ Errors: `{"error": "<message>"}` with status
 | PUT | `/api/doc/{kind}/{id}` | full replace of the doc body |
 | DELETE | `/api/doc/{kind}/{id}` | inbox project cannot be deleted |
 | GET | `/api/projects/{id}` | `{project, chats[], files[], actions[]}` |
+| POST | `/api/skills/draft` | body `{description}` (1-4000 chars). One model call, no tools, temperature 0.3. Returns `{name, instructions, model, route}`. Saves nothing; the UI fills the new-skill form for review. Records `skill.drafted`. Errors: 400 `Invalid` (bad description, model output not a JSON object, missing or oversized name (max 60) or instructions (max 4000)). |
 
 Project fields: `name, instructions, scope[] (workspace paths), status{state: active|paused|done, note, next_step, updated}`.
 Role: `name, title, system_prompt`. Skill: `name, instructions`. MCP: `name, url, enabled, headers{}`. Workflow: `name, steps[{id, prompt, mode, save_path}]`.
@@ -124,6 +125,6 @@ Budget: `context_chars` (default 48,000). Snapshot hash is stored on each assist
 
 ## Action record types
 
-`backup.restored` · `chat.created` · `chat.deleted` · `chat.moved` · `file.deleted` · `file.saved` · `message.deleted` · `message.pinned` · `message.saved` · `message.superseded` · `message.unpinned` · `run.finished` · `status.updated` · `tool.executed` · `turn.error` · `workflow.step`.
+`backup.restored` · `chat.created` · `chat.deleted` · `chat.moved` · `file.deleted` · `file.saved` · `message.deleted` · `message.pinned` · `message.saved` · `message.superseded` · `message.unpinned` · `run.finished` · `skill.drafted` · `status.updated` · `tool.executed` · `turn.error` · `workflow.step`.
 
 Append-only: UPDATE and DELETE on this table are blocked by triggers.

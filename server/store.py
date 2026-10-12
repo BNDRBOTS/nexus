@@ -1,4 +1,4 @@
-"""SQLite store. One file, stdlib only.
+"""Store. SQLite file by default (stdlib only); Postgres when NX_DB_URL is set (psycopg, optional).
 
 Tables:
   doc(kind, id, data JSON, updated)   projects, chats, roles, skills, workflows, runs, mcp, setting
@@ -8,6 +8,7 @@ Tables:
 import hashlib
 import json
 import pathlib
+import re
 import secrets
 import sqlite3
 import threading
@@ -48,6 +49,54 @@ TRIGGERS = [
     "CREATE TRIGGER IF NOT EXISTS action_no_delete BEFORE DELETE ON action "
     "BEGIN SELECT RAISE(ABORT, 'action record is append-only'); END;",
 ]
+DROP_TRIGGERS = ["DROP TRIGGER IF EXISTS action_no_update", "DROP TRIGGER IF EXISTS action_no_delete"]
+
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS doc(
+  kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY(kind, id));
+CREATE TABLE IF NOT EXISTS file(
+  project_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL,
+  sha TEXT NOT NULL, bytes BIGINT NOT NULL, updated DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY(project_id, path));
+CREATE TABLE IF NOT EXISTS action(
+  id BIGSERIAL PRIMARY KEY, ts DOUBLE PRECISION NOT NULL, project_id TEXT, chat_id TEXT,
+  type TEXT NOT NULL, ref TEXT, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS action_project ON action(project_id, id);
+CREATE INDEX IF NOT EXISTS action_chat ON action(chat_id, id);
+"""
+
+# Postgres: function + drop/create pairs (CREATE TRIGGER has no IF NOT EXISTS). Each statement is run alone.
+PG_TRIGGERS = [
+    "CREATE OR REPLACE FUNCTION nx_action_immutable() RETURNS trigger AS $$ BEGIN "
+    "RAISE EXCEPTION 'action record is append-only'; END; $$ LANGUAGE plpgsql",
+    "DROP TRIGGER IF EXISTS action_no_update ON action",
+    "CREATE TRIGGER action_no_update BEFORE UPDATE ON action FOR EACH ROW EXECUTE FUNCTION nx_action_immutable()",
+    "DROP TRIGGER IF EXISTS action_no_delete ON action",
+    "CREATE TRIGGER action_no_delete BEFORE DELETE ON action FOR EACH ROW EXECUTE FUNCTION nx_action_immutable()",
+]
+PG_DROP_TRIGGERS = ["DROP TRIGGER IF EXISTS action_no_update ON action",
+                    "DROP TRIGGER IF EXISTS action_no_delete ON action"]
+
+
+class _Db:
+    """One connection. Code writes SQL with `?`; Postgres gets `%s`. Rows support `row["col"]` on both backends."""
+
+    def __init__(self, conn, pg):
+        self.conn = conn
+        self.pg = pg
+
+    def execute(self, sql, args=()):
+        if self.pg:
+            sql = sql.replace("?", "%s")
+            return self.conn.execute(sql, tuple(args) if args else None)
+        return self.conn.execute(sql, tuple(args))
+
+    def triggers(self):
+        return PG_TRIGGERS if self.pg else TRIGGERS
+
+    def drop_triggers(self):
+        return PG_DROP_TRIGGERS if self.pg else DROP_TRIGGERS
 
 
 def now():
@@ -64,13 +113,27 @@ def sha(text):
 
 def init(path=None):
     global _conn
-    p = pathlib.Path(path or C.DB_PATH)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _conn = sqlite3.connect(str(p), check_same_thread=False, isolation_level=None)
-    _conn.row_factory = sqlite3.Row
-    _conn.execute("PRAGMA journal_mode=WAL")
-    _conn.executescript(SCHEMA)
-    for t in TRIGGERS:
+    if C.DB_URL:
+        if not C.DB_URL.startswith(("postgres://", "postgresql://")):
+            raise RuntimeError("NX_DB_URL must start with postgresql:// (or postgres://)")
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as e:
+            raise RuntimeError("NX_DB_URL is set but psycopg is missing: pip install 'psycopg[binary]'") from e
+        _conn = _Db(psycopg.connect(C.DB_URL, autocommit=True, row_factory=dict_row), pg=True)
+        for stmt in PG_SCHEMA.split(";"):
+            if stmt.strip():
+                _conn.execute(stmt)
+    else:
+        p = pathlib.Path(path or C.DB_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        raw = sqlite3.connect(str(p), check_same_thread=False, isolation_level=None)
+        raw.row_factory = sqlite3.Row
+        raw.execute("PRAGMA journal_mode=WAL")
+        raw.executescript(SCHEMA)
+        _conn = _Db(raw, pg=False)
+    for t in _conn.triggers():
         _conn.execute(t)
     with _lock:
         if not get_doc("project", C.INBOX):
@@ -85,7 +148,9 @@ def init(path=None):
 
 
 def db_path():
-    return str(C.DB_PATH if _conn is None else pathlib.Path(C.DB_PATH))
+    if _conn is not None and _conn.pg:
+        return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", C.DB_URL)   # never expose the password
+    return str(C.DB_PATH)
 
 
 # ---------- docs ----------
@@ -184,11 +249,12 @@ def del_file(project_id, path):
 # ---------- action record (append-only) ----------
 
 def add_action(atype, ref=None, payload=None, project_id=None, chat_id=None):
+    sql = "INSERT INTO action(ts,project_id,chat_id,type,ref,payload) VALUES(?,?,?,?,?,?)"
+    args = (now(), project_id, chat_id, atype, ref, json.dumps(payload or {}, ensure_ascii=False))
     with _lock:
-        cur = _conn.execute(
-            "INSERT INTO action(ts,project_id,chat_id,type,ref,payload) VALUES(?,?,?,?,?,?)",
-            (now(), project_id, chat_id, atype, ref, json.dumps(payload or {}, ensure_ascii=False)))
-        return cur.lastrowid
+        if _conn.pg:
+            return _conn.execute(sql + " RETURNING id", args).fetchone()["id"]
+        return _conn.execute(sql, args).lastrowid
 
 
 def list_actions(project_id=None, chat_id=None, limit=100):
@@ -217,9 +283,9 @@ def list_actions(project_id=None, chat_id=None, limit=100):
 def counts():
     with _lock:
         return {
-            "docs": _conn.execute("SELECT COUNT(*) FROM doc").fetchone()[0],
-            "files": _conn.execute("SELECT COUNT(*) FROM file").fetchone()[0],
-            "actions": _conn.execute("SELECT COUNT(*) FROM action").fetchone()[0],
+            "docs": _conn.execute("SELECT COUNT(*) AS n FROM doc").fetchone()["n"],
+            "files": _conn.execute("SELECT COUNT(*) AS n FROM file").fetchone()["n"],
+            "actions": _conn.execute("SELECT COUNT(*) AS n FROM action").fetchone()["n"],
         }
 
 
@@ -244,8 +310,8 @@ def restore(payload):
     with _lock:
         _conn.execute("BEGIN")
         try:
-            _conn.execute("DROP TRIGGER IF EXISTS action_no_update")
-            _conn.execute("DROP TRIGGER IF EXISTS action_no_delete")
+            for t in _conn.drop_triggers():
+                _conn.execute(t)
             for t in ("doc", "file", "action"):
                 _conn.execute(f"DELETE FROM {t}")
             for d in payload.get("docs", []):
@@ -258,12 +324,15 @@ def restore(payload):
                 _conn.execute("INSERT INTO action(id,ts,project_id,chat_id,type,ref,payload) VALUES(?,?,?,?,?,?,?)",
                               (a["id"], a["ts"], a.get("project_id"), a.get("chat_id"), a["type"], a.get("ref"),
                                json.dumps(a["payload"], ensure_ascii=False)))
-            for t in TRIGGERS:
+            if _conn.pg:   # explicit ids do not advance the BIGSERIAL sequence
+                _conn.execute("SELECT setval(pg_get_serial_sequence('action','id'), "
+                              "COALESCE(MAX(id),0)+1, false) FROM action")
+            for t in _conn.triggers():
                 _conn.execute(t)
             _conn.execute("COMMIT")
         except Exception:
             _conn.execute("ROLLBACK")
-            for t in TRIGGERS:
+            for t in _conn.triggers():
                 _conn.execute(t)
             raise
     add_action("backup.restored", None, {"docs": len(payload.get("docs", [])),

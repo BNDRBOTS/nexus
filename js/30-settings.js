@@ -38,6 +38,11 @@
   };
 
   const sel = {}; // kind -> selected id ('' = new)
+  let pendingDraft = null; // skill maker: draft waiting to fill the new-skill editor
+  const takeDraft = () => { const d = pendingDraft; pendingDraft = null; return d; };
+  const draftBox = () => `<div class="field"><label>Draft from description (model drafts; you review before Save)</label>
+    <textarea class="textarea" data-draft-desc style="min-height:70px" placeholder="What should this skill make the assistant do?"></textarea>
+    <div class="row"><button class="btn" data-do="draft">Draft skill</button></div></div>`;
 
   function open(section) {
     NX.modal.open(`
@@ -198,13 +203,14 @@
     const F = FORMS[kind];
     const items = S[F.list] || [];
     const id = sel[kind] === undefined ? (items[0] && items[0].id) || '' : sel[kind];
-    const doc = id ? byId(items, id) : Object.assign({}, F.blank);
+    const doc = id ? byId(items, id) : Object.assign({}, F.blank, takeDraft());
     root.innerHTML = `
       <div class="row" style="flex-wrap:wrap">
         ${items.map((d) => `<button class="chip ${d.id === id ? 'on' : ''}" data-pick="${esc(d.id)}">${esc(d.name || d.id)}</button>`).join('')}
         <button class="chip" data-pick="">+ New ${F.label.toLowerCase()}</button>
       </div>
       <h3>${id ? 'Edit ' + esc(F.label.toLowerCase()) : 'New ' + esc(F.label.toLowerCase())}</h3>
+      ${kind === 'skill' ? draftBox() : ''}
       ${F.fields.map(([k, type, label]) => field(k, type, label, doc[k])).join('')}
       <div class="row">
         <button class="btn primary" data-do="save">Save</button>
@@ -230,6 +236,15 @@
     if (!b) return;
     const act = b.dataset.do;
     try {
+      if (act === 'draft') {
+        const desc = (document.querySelector('#sec [data-draft-desc]') || {}).value || '';
+        if (!desc.trim()) return NX.toast('Describe the skill first', 'err');
+        b.disabled = true;
+        try { pendingDraft = await NX.api('POST', '/api/skills/draft', { description: desc.trim() }); } finally { b.disabled = false; }
+        sel[kind] = '';
+        NX.toast('Draft ready. Review the fields, then Save.', 'ok');
+        return show(F.list);
+      }
       if (act === 'save') {
         const body = Object.assign({}, doc);
         for (const el of document.querySelectorAll('#sec [data-f]')) {

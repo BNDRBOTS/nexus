@@ -1,5 +1,7 @@
 """End-to-end API tests. Starts the real server (subprocess) against a mock model and mock MCP server.
 Run from repo root:  python3 -m unittest -v tests.test_api
+Postgres run:        NX_TEST_DB_URL=postgresql://user@host/postgres python3 -m unittest tests.test_api
+                     (creates and drops a fresh database per run; needs psycopg)
 """
 import json
 import os
@@ -69,15 +71,34 @@ class Api:
         return events
 
 
+def _pg_create_db(admin_url):
+    """Fresh database for one run. Returns (db_url, db_name)."""
+    import secrets
+    from urllib.parse import urlsplit, urlunsplit
+    import psycopg
+    name = "nx_test_" + secrets.token_hex(4)
+    with psycopg.connect(admin_url, autocommit=True) as con:
+        con.execute(f"CREATE DATABASE {name}")
+    parts = urlsplit(admin_url)
+    return urlunsplit(parts._replace(path="/" + name)), name
+
+
 class NexusTests(unittest.TestCase):
+    db_url = None
+    db_name = None
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="nx-test-")
         cls.model_srv, cls.model_url = M.start_model()
         cls.mcp_srv, cls.mcp_url = M.start_mcp()
         cls.port = _free_port()
+        admin = os.environ.get("NX_TEST_DB_URL", "")
+        if admin:
+            cls.db_url, cls.db_name = _pg_create_db(admin)
         env = dict(os.environ, NX_PORT=str(cls.port), NX_HOST="127.0.0.1", NX_DATA_DIR=cls.tmp,
-                   NX_TOKEN=TOKEN, NX_ENABLE_PYTHON="1", NX_GATEWAY_URL="", NX_GATEWAY_KEY="")
+                   NX_TOKEN=TOKEN, NX_ENABLE_PYTHON="1", NX_GATEWAY_URL="", NX_GATEWAY_KEY="",
+                   NX_DB_URL=cls.db_url or "")
         cls.proc = subprocess.Popen([sys.executable, "-m", "server.app"], cwd=ROOT, env=env,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         cls.base = f"http://127.0.0.1:{cls.port}"
@@ -95,6 +116,10 @@ class NexusTests(unittest.TestCase):
         cls.proc.wait(timeout=10)
         cls.model_srv.shutdown()
         cls.mcp_srv.shutdown()
+        if cls.db_name:
+            import psycopg
+            with psycopg.connect(os.environ["NX_TEST_DB_URL"], autocommit=True) as con:
+                con.execute(f"DROP DATABASE IF EXISTS {cls.db_name} WITH (FORCE)")
 
     def test_01_auth_and_state(self):
         s, _ = self.api.call("GET", "/api/state", token=False)
@@ -280,6 +305,11 @@ class NexusTests(unittest.TestCase):
         self.assertIn("2/2 steps", proj["project"]["status"]["note"])
 
     def test_15_backup_restore_and_append_only(self):
+        if self.db_url:
+            # simulate a fresh database: sequence back to 1, so restored explicit ids would collide without setval
+            import psycopg
+            with psycopg.connect(self.db_url, autocommit=True) as c:
+                c.execute("SELECT setval(pg_get_serial_sequence('action','id'), 1, false)")
         s, bk = self.api.call("GET", "/api/backup")
         self.assertEqual(s, 200)
         self.assertGreater(len(bk["actions"]), 10)
@@ -287,13 +317,26 @@ class NexusTests(unittest.TestCase):
         self.assertEqual(s, 200)
         s, acts = self.api.call("GET", f"/api/actions?project={NexusTests.project_id}&limit=1000")
         self.assertGreater(len(acts["actions"]), 10)
-        db = os.path.join(self.tmp, "nexus.db")
-        con = sqlite3.connect(db)
-        with self.assertRaises(sqlite3.DatabaseError):
-            con.execute("UPDATE action SET type='tampered' WHERE id=1")
-        with self.assertRaises(sqlite3.DatabaseError):
-            con.execute("DELETE FROM action WHERE id=1")
-        con.close()
+        if self.db_url:
+            import psycopg
+            con = psycopg.connect(self.db_url, autocommit=True)
+            with self.assertRaises(psycopg.Error):
+                con.execute("UPDATE action SET type='tampered' WHERE id=1")
+            with self.assertRaises(psycopg.Error):
+                con.execute("DELETE FROM action WHERE id=1")
+            # restore wrote explicit ids: the next generated id must not collide
+            s, _ = self.api.call("PUT", "/api/files", {"project": NexusTests.project_id,
+                                                        "path": "after/restore.md", "content": "x"})
+            self.assertEqual(s, 200, "write after restore must not collide with restored action ids")
+            con.close()
+        else:
+            db = os.path.join(self.tmp, "nexus.db")
+            con = sqlite3.connect(db)
+            with self.assertRaises(sqlite3.DatabaseError):
+                con.execute("UPDATE action SET type='tampered' WHERE id=1")
+            with self.assertRaises(sqlite3.DatabaseError):
+                con.execute("DELETE FROM action WHERE id=1")
+            con.close()
 
     def test_16_python_endpoint(self):
         s, res = self.api.call("POST", "/api/python", {"code": "print(1)", "project_id": NexusTests.project_id})
@@ -453,6 +496,62 @@ class NexusTests(unittest.TestCase):
         js = open(os.path.join(ROOT, "js", "05-knacks.js"), encoding="utf-8").read()
         ids = tuple(_re.findall(r"\{ id: '([a-z]+)'", js))
         self.assertEqual(ids, Cfg.KNACK_BUILTIN_IDS)
+
+    def test_26_skill_maker_drafts_without_saving(self):
+        s, before = self.api.call("GET", "/api/state")
+        names_before = sorted(k["name"] for k in before["skills"])
+        s, res = self.api.call("POST", "/api/skills/draft", {"description": "SKILLDRAFT: review contracts"})
+        self.assertEqual(s, 200, res)
+        self.assertEqual(res["name"], "Contract Reviewer")
+        self.assertTrue(res["instructions"].startswith("Check every clause"))
+        s, res = self.api.call("POST", "/api/skills/draft", {"description": "SKILLBAD: anything"})
+        self.assertEqual(s, 400, res)
+        s, res = self.api.call("POST", "/api/skills/draft", {"description": "   "})
+        self.assertEqual(s, 400, res)
+        s, after = self.api.call("GET", "/api/state")
+        self.assertEqual(sorted(k["name"] for k in after["skills"]), names_before, "draft must not save a skill")
+        s, acts = self.api.call("GET", "/api/actions?limit=500")
+        self.assertTrue(any(a["type"] == "skill.drafted" and a["ref"] == "Contract Reviewer" for a in acts["actions"]))
+
+
+    def _cli(self, args, stdin=None, token=TOKEN):
+        env = dict(os.environ, NX_URL=self.base, NX_TOKEN=token)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "client", "nexus.py")] + args,
+                           input=stdin, capture_output=True, text=True, env=env, timeout=120)
+        return r.returncode, r.stdout, r.stderr
+
+    def test_27_connector_cli_round_trip(self):
+        code, out, _ = self._cli(["project", "create", "--name", "CLI Project", "--instructions", "Be literal",
+                                  "--scope", "notes/brief.md"])
+        self.assertEqual(code, 0, out)
+        pid = json.loads(out)["id"]
+        code, out, _ = self._cli(["chat", "create", "--project", pid, "--mode", "research", "--title", "cli"])
+        self.assertEqual(code, 0, out)
+        cid = json.loads(out)["id"]
+        code, out, _ = self._cli(["chat", "send", cid, "--stdin"], stdin="ECHO: hello from cli")
+        self.assertEqual(code, 0, out)
+        turn = json.loads(out)
+        self.assertEqual(turn["assistant"]["content"], "ECHO: ECHO: hello from cli")
+        mid = turn["assistant"]["id"]
+        code, out, _ = self._cli(["chat", "save", cid, mid, "out/cli.md"])
+        self.assertEqual(code, 0, out)
+        code, out, _ = self._cli(["file", "get", pid, "out/cli.md"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["content"], "ECHO: ECHO: hello from cli")
+        code, out, _ = self._cli(["actions", "--chat", cid, "--limit", "100"])
+        self.assertEqual(code, 0, out)
+        types = {a["type"] for a in json.loads(out)["actions"]}
+        self.assertIn("file.saved", types)
+        self.assertIn("chat.created", types)
+        code, out, _ = self._cli(["chat", "context", cid])
+        self.assertEqual(code, 0, out)
+        self.assertIn("snapshot", json.loads(out))
+        # usage error exits 2; server auth error exits 1 with JSON on stderr
+        code, _, err = self._cli(["chat", "send", cid])
+        self.assertEqual(code, 2, err)
+        code, out, err = self._cli(["file", "list", pid], token="wrong")
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(err)["status"], 401)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """HTTP server (stdlib only). Serves the UI and the JSON/SSE API.
 
 Run:  python3 -m server.app          (from repo root)
-Env:  NX_HOST NX_PORT NX_DATA_DIR NX_TOKEN NX_ALLOW_OPEN NX_GATEWAY_URL NX_GATEWAY_KEY NX_GATEWAY_MODEL NX_ENABLE_PYTHON
+Env:  NX_HOST NX_PORT NX_DATA_DIR NX_DB_URL NX_TOKEN NX_ALLOW_OPEN NX_GATEWAY_URL NX_GATEWAY_KEY NX_GATEWAY_MODEL NX_ENABLE_PYTHON
 Auth: every /api/* call needs  Authorization: Bearer <token>  (or X-NX-Token). Token = NX_TOKEN, else
       DATA_DIR/token (created 0600 on first start). NX_ALLOW_OPEN=1 disables auth (local dev only).
 Provider key (custom route): header X-NX-Provider-Key. Never stored, never logged.
@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from . import config as C
 from . import engine as E
 from . import mcp as MCP
+from . import skillmaker as SM
 from . import provider as P
 from . import store
 from . import tools as T
@@ -171,6 +172,15 @@ def put_settings(req):
     cur["knacks"] = normalize_knacks(cur.get("knacks", []))
     store.put_doc("setting", "app", cur)
     return 200, store.get_settings()
+
+
+@route("POST", "/api/skills/draft")
+def draft_skill(req):
+    body = req.json()
+    result = SM.draft(body.get("description"), store.get_settings(), req.provider_key)
+    store.add_action("skill.drafted", result["name"], {"name": result["name"], "chars": len(result["instructions"]),
+                                                       "model": result["model"]})
+    return 200, result
 
 
 @route("POST", "/api/doc/{kind}")

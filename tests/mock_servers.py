@@ -81,6 +81,10 @@ def _script(last_user, after_tool, msgs, tools):
         return [_call("workspace_write", {"path": path.strip(), "content": content.strip()})]
     if u.startswith("STATUS:") and "project_set_status" in names:
         return [_call("project_set_status", {"state": "active", "note": u[7:].strip(), "next_step": "continue"})]
+    if u.startswith("SKILLDRAFT:"):
+        return [_text('Draft:\n```json\n{"name": "Contract Reviewer", "instructions": "Check every clause against the brief. Output risks first, then fixes."}\n```')]
+    if u.startswith("SKILLBAD:"):
+        return [_text("I cannot produce JSON for that.")]
     if u.startswith("SEARCH:") and "search_sources" in names:
         return [_call("search_sources", {"query": u[7:].strip()})]
     if u.startswith("PY:") and "python_run" in names:

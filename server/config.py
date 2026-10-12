@@ -10,6 +10,7 @@ HOST = ENV.get("NX_HOST", "0.0.0.0")
 PORT = int(ENV.get("NX_PORT", "8000"))
 DATA_DIR = pathlib.Path(ENV.get("NX_DATA_DIR", ROOT / "data"))
 DB_PATH = DATA_DIR / "nexus.db"
+DB_URL = ENV.get("NX_DB_URL", "")                 # postgresql://… selects the Postgres backend (needs psycopg); empty: SQLite file
 
 TOKEN = ENV.get("NX_TOKEN", "")                       # empty: app.main() loads or creates DATA_DIR/token
 ALLOW_OPEN = ENV.get("NX_ALLOW_OPEN") == "1"          # explicit opt-out: unauthenticated API (local dev only)
