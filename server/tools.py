@@ -11,6 +11,7 @@ import tempfile
 
 from . import config as C
 from . import mcp
+from . import plugins as PL
 from . import store
 
 
@@ -104,6 +105,11 @@ def specs_for(chat, mode, settings):
                         "name": name, "description": f"[{srv['name']}] {t.get('description', '')}"[:1000],
                         "parameters": schema}})
                     routes[name] = ("mcp", srv["id"], t["name"])
+            continue
+        if g == "plugins":
+            p_specs, p_routes = PL.specs()
+            specs.extend(p_specs)
+            routes.update(p_routes)
             continue
         if g == "python" and not C.PYTHON_ENABLED:
             continue
@@ -281,6 +287,12 @@ def execute(name, args, routes, ctx):
         route = routes.get(name)
         if not route:
             raise ToolError(f"tool not enabled for this chat: {name}")
+        if route[0] == "plugin":
+            plugin = store.get_doc("plugin", route[1])
+            if not plugin:
+                raise ToolError("plugin missing")
+            text = PL.call(plugin, args, ctx.get("project_id"))
+            return {"ok": True, "output": text, "summary": f"plugin {plugin['name']}"}
         if route[0] == "mcp":
             srv = store.get_doc("mcp", route[1])
             if not srv:

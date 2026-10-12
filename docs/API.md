@@ -17,7 +17,7 @@ Errors: `{"error": "<message>"}` with status
 | GET | `/api/backup` | full JSON export |
 | POST | `/api/restore` | body = backup export; replaces all data; records `backup.restored` |
 
-## Documents (project, role, skill, workflow, mcp)
+## Documents (project, role, skill, workflow, mcp, plugin)
 
 | Method | Path | Notes |
 |---|---|---|
@@ -29,6 +29,7 @@ Errors: `{"error": "<message>"}` with status
 
 Project fields: `name, instructions, scope[] (workspace paths), status{state: active|paused|done, note, next_step, updated}`.
 Role: `name, title, system_prompt`. Skill: `name, instructions`. MCP: `name, url, enabled, headers{}`. Workflow: `name, steps[{id, prompt, mode, save_path}]`.
+Plugin: `name, description (≤500), url (http(s), ≤2000), enabled, parameters (JSON schema, type object, ≤8000 chars), headers{} (≤10 entries, values ≤500, no CR/LF)`. Unknown fields → 400. Id prefix `plg_`. Tool name `plugin_<id>`, group `plugins` (off by default; enable per chat).
 
 ## Chats
 
@@ -92,6 +93,8 @@ Paths are normalized relative paths. Traversal is rejected. Max 2,000,000 chars 
 | POST | `/api/python` | `{"project_id", "code"}` → `{ok, output, summary}`. Requires `NX_ENABLE_PYTHON=1` (off by default). Child process gets a minimal environment and rlimits; no server secrets in env. Not a filesystem sandbox. |
 | POST | `/api/mcp/{id}/probe` | `{ok, tools[]}` or `{ok:false, error}` |
 
+Plugin call contract: `POST <url>`, `Content-Type: application/json`, body = tool arguments object, headers = plugin `headers` + `X-NX-Project: <project id>`. 20 s timeout. Response read capped at 48,000 bytes. Redirects are followed by urllib.
+
 Provider contract (checked against provider docs, 2026-10): DeepSeek sends `thinking` and `reasoning_effort` only when set. When a request carries `tools`, prior `reasoning_content` is sent back; otherwise it is stripped. OpenRouter sends `reasoning: {effort}` only when set. Z.ai and custom endpoints get no provider-specific fields.
 
 Workflow step: `prompt` may contain `{{input}}` (run input) and `{{prev}}` (previous step output). `save_path` writes the step output to the project workspace. Each step appends a `workflow.step` record. On finish: `run.finished` record, and project `status` is updated with a summary.
@@ -114,6 +117,7 @@ curl $NX/api/runs/$RUN -H "Authorization: Bearer $NX_TOKEN"
 | `project_set_status` | status | set state, verified note, next step (record `status.updated`) |
 | `python_run` | python | run code in temp dir with scope files; saves new/changed text files |
 | `mcp_<server>_<tool>` | mcp | MCP tool from an enabled server |
+| `plugin_<id>` | plugins | HTTP tool: POST `url` with JSON arguments; response text is the output (≤12,000 chars). Non-2xx or unreachable = tool error |
 
 Mode default groups: Work = workspace, status, sources, mcp · Research = sources, workspace, mcp · Code = workspace, sources, python, mcp. A chat's `tool_groups` overrides the mode default (`null` = use default).
 

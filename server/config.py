@@ -53,7 +53,7 @@ MODES = {
     },
 }
 
-TOOL_GROUPS = ["workspace", "status", "sources", "python", "mcp"]
+TOOL_GROUPS = ["workspace", "status", "sources", "python", "mcp", "plugins"]   # plugins: off in every mode default
 
 # Provider presets: defaults only. Every value here was checked against the provider's current docs.
 # openrouter has no default model: model IDs are user-supplied (discover via GET /api/v1/models).

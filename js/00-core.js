@@ -6,7 +6,7 @@
 
   NX.state = {
     version: '', modes: {}, toolGroups: [], inbox: 'inbox', settings: null,
-    projects: [], chats: [], roles: [], skills: [], workflows: [], mcp: [],
+    projects: [], chats: [], roles: [], skills: [], workflows: [], mcp: [], plugins: [],
     pythonEnabled: false, tokenRequired: false,
     projectId: null,      // selected project in sidebar (new chats land here)
     chatId: null,         // open chat

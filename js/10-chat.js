@@ -52,7 +52,7 @@
     Object.assign(S, {
       version: st.version, modes: st.modes, toolGroups: st.tool_groups, inbox: st.inbox, settings: st.settings,
       projects: st.projects, chats: st.chats, roles: st.roles, skills: st.skills, workflows: st.workflows,
-      mcp: st.mcp, pythonEnabled: st.python_enabled, tokenRequired: st.token_required,
+      mcp: st.mcp, plugins: st.plugins || [], pythonEnabled: st.python_enabled, tokenRequired: st.token_required,
       gatewayConfigured: st.gateway_configured, providerPresets: st.provider_presets,
     });
     NX.theme.apply(S.settings.theme);
@@ -153,6 +153,7 @@
     const e = effective();
     const defs = [
       ['workspace', 'Files'], ['status', 'Status'], ['sources', 'Sources'], ['python', 'Python'], ['mcp', 'MCP'],
+      ['plugins', 'Plugins'],
     ];
     $('#toolChips').innerHTML = defs.map(([g, label]) => {
       const disabled = g === 'python' && !S.pythonEnabled;

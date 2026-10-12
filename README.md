@@ -63,6 +63,7 @@ server/
   context.py   context builder + snapshot (single source of the sent message list)
   engine.py    turn loop, regenerate, save/pin/delete, workflow runs, per-chat lock
   skillmaker.py skill draft from a description (one model call, saves nothing)
+  plugins.py   HTTP tool plugins: validation, tool specs, call
   app.py       HTTP routes, auth, SSE, static files
 js/
   00-core.js   global NX: state, api, stream (SSE), md, theme, modal/ask/confirm/toast
@@ -80,6 +81,7 @@ docs/CONNECTOR.md  machine contract for driving chats from another process
 ```
 
 Extension points:
+- **Plugin**: no code needed. Settings → Plugins, or `POST /api/doc/plugin`. Endpoint receives JSON arguments and returns text. See `docs/API.md`.
 - **Tool**: add a function to `tools.py` (`_fn` spec + handler in the dispatch table) and a name in `TOOL_GROUPS`.
 - **Mode**: add an entry to `config.MODES`; UI picks it up from `/api/state`.
 - **Frontend module**: new file in `js/`, register in `index.html` after `00-core.js`, expose on `NX.<name>`.

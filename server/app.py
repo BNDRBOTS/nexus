@@ -20,13 +20,14 @@ from urllib.parse import parse_qs, urlparse
 from . import config as C
 from . import engine as E
 from . import mcp as MCP
+from . import plugins as PL
 from . import skillmaker as SM
 from . import provider as P
 from . import store
 from . import tools as T
 
 ROUTES = []
-DOC_KINDS = {"project", "role", "skill", "workflow", "mcp"}
+DOC_KINDS = {"project", "role", "skill", "workflow", "mcp", "plugin"}
 CHAT_PATCH_FIELDS = {"title", "mode", "role_id", "chat_prompt", "reminder", "tool_groups", "project_id", "skill_ids"}
 
 
@@ -89,6 +90,7 @@ def state(req):
         "settings": store.get_settings(), "projects": store.list_docs("project"), "chats": chats,
         "roles": store.list_docs("role"), "skills": store.list_docs("skill"),
         "workflows": store.list_docs("workflow"), "mcp": store.list_docs("mcp"),
+        "plugins": store.list_docs("plugin"),
         "python_enabled": C.PYTHON_ENABLED, "gateway_configured": bool(C.GATEWAY["url"]),
         "token_required": bool(C.TOKEN),
         "provider_presets": C.PROVIDER_PRESETS, "reasoning_efforts": C.REASONING_EFFORTS,
@@ -189,10 +191,12 @@ def create_doc(req):
     if kind not in DOC_KINDS:
         raise HttpError(400, f"kind must be one of {sorted(DOC_KINDS)}")
     body = req.json()
-    prefix = {"project": "prj", "role": "role", "skill": "skl", "workflow": "wf", "mcp": "mcp"}[kind]
+    prefix = {"project": "prj", "role": "role", "skill": "skl", "workflow": "wf", "mcp": "mcp", "plugin": "plg"}[kind]
     doc_id = body.pop("id", None) or store.new_id(prefix)
     if store.get_doc(kind, doc_id):
         raise HttpError(409, "id exists; use PUT")
+    if kind == "plugin":
+        body = PL.normalize(body)
     return 201, store.put_doc(kind, doc_id, body)
 
 
@@ -204,6 +208,8 @@ def put_doc(req):
     body = req.json()
     if kind == "project" and req.p["id"] == C.INBOX:
         body["name"] = body.get("name") or "Inbox"
+    if kind == "plugin":
+        body = PL.normalize(body)
     return 200, store.put_doc(kind, req.p["id"], body)
 
 

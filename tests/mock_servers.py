@@ -5,6 +5,7 @@ Scripted by keywords in the last user message:
   SEARCH:<query>       -> search_sources tool call
   PY:<code>            -> python_run tool call
   MCP:<a>,<b>          -> mcp add tool call
+  PLUGIN:<text>        -> first plugin_* tool call with {"text": ...}
   FAIL                 -> HTTP 500 from the model
   anything else        -> echoes the last user message
 """
@@ -89,6 +90,9 @@ def _script(last_user, after_tool, msgs, tools):
         return [_call("search_sources", {"query": u[7:].strip()})]
     if u.startswith("PY:") and "python_run" in names:
         return [_call("python_run", {"code": u[3:].strip()})]
+    if u.startswith("PLUGIN:") and any(n.startswith("plugin_") for n in names):
+        pname = next(n for n in names if n.startswith("plugin_"))
+        return [_call(pname, {"text": u[7:].strip()})]
     if u.startswith("MCP:") and any(n.startswith("mcp_") for n in names):
         mcp_name = next(n for n in names if n.startswith("mcp_"))
         a, _, b = u[4:].partition(",")
@@ -145,6 +149,42 @@ class _Mcp(BaseHTTPRequestHandler):
             return self._send(200, {"jsonrpc": "2.0", "id": msg["id"], "result": {
                 "content": [{"type": "text", "text": str(a + b)}], "isError": False}})
         return self._send(400, {"error": "bad method"})
+
+
+class _Plugin(BaseHTTPRequestHandler):
+    """Plugin endpoint: /echo answers text, /fail answers 500. Records the last request for assertions."""
+    last = {}
+
+    def log_message(self, *args):
+        pass
+
+    def _send(self, status, text):
+        raw = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        if self.path == "/last":
+            return self._send(200, json.dumps(_Plugin.last))
+        self._send(404, "not found")
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(n) or b"{}")
+        _Plugin.last = {"path": self.path, "body": body, "x_test": self.headers.get("X-Test"),
+                        "project": self.headers.get("X-NX-Project")}
+        if self.path == "/echo":
+            return self._send(200, "plugin says: " + str(body.get("text", "")))
+        if self.path == "/fail":
+            return self._send(500, "boom")
+        self._send(404, "not found")
+
+
+def start_plugin():
+    return start(_Plugin)
 
 
 def start(handler_cls):

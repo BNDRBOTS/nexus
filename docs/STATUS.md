@@ -17,7 +17,7 @@ Version 2.0.0. Branch `arena/fceba36e-nexus`.
 | 8 | MCP usage | partial | `server/mcp.py` Streamable HTTP (JSON + SSE) | stdio out of scope |
 | 9 | Python tooling | partial | `tools.run_python` (`python -I`, temp dir, 20 s, minimal env, rlimits) | not a filesystem sandbox; off unless `NX_ENABLE_PYTHON=1` |
 | 10 | Canvas connect | partial | `js/20-panels.js` canvas panel | connection to project files not verified |
-| 11 | Plugins / skills / skill maker | partial | skill IDs on chats; skill maker `server/skillmaker.py` + `POST /api/skills/draft` (draft only, UI fills new-skill form, saves nothing; test_26, jsdom `smoke`) | no plugin loader |
+| 11 | Plugins / skills / skill maker | partial | plugins: `server/plugins.py` (HTTP tools, doc kind `plugin`, group `plugins`, test_28, jsdom smoke4); skill IDs on chats; skill maker `server/skillmaker.py` + `POST /api/skills/draft` (draft only, saves nothing; test_26, jsdom smoke3) | no plugin install/marketplace; plugins are HTTP endpoints only (no in-process code); no CLI command for plugins |
 | 12 | System prompt + chat prompt | partial | global `system_prompt`, roles | per-chat prompt path not verified |
 | 13 | Chat session connector | done | `client/nexus.py` (stdlib CLI, JSON out, exit codes), `docs/CONNECTOR.md`, routes in `docs/API.md` | no streaming in CLI (use SSE over HTTP); no non-Python client |
 | 14 | Optional SQL DB | done | `store.py` `_Db` shim; `NX_DB_URL=postgresql://…` selects Postgres (psycopg, lazy import); SQLite default | no other SQL engines; no schema migrations tool (schema is `CREATE IF NOT EXISTS`); move data via backup/restore |
@@ -50,6 +50,7 @@ Not built: per-model capability discovery (OpenRouter `/api/v1/models` `supporte
 ## Known risks
 
 - Postgres backend: tested against one local PostgreSQL 16 instance only. No TLS settings, pooling or failover. Not load-tested.
+- Plugins: the server POSTs to any plugin URL it can reach, including internal hosts. Plugin output is untrusted model input. Same trust boundary as MCP servers.
 - Auth: token required by default (`NX_TOKEN` or generated `data/token`). `NX_ALLOW_OPEN=1` removes it; do not set on a reachable host.
 - Project isolation is logical, not multi-tenant. Any holder of the token can read every project through `/api/files` and `/api/doc`. Tools and model context are bound server-side to the chat's project (tested: test_08, test_20).
 - `NX_ENABLE_PYTHON=1` runs model-written code on the host as the server user. It can read host files, including `data/nexus.db` and `data/token`. Keep disabled unless the host is single-owner.
@@ -57,9 +58,9 @@ Not built: per-model capability discovery (OpenRouter `/api/v1/models` `supporte
 
 ## Verification
 
-- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 45 Python tests OK on SQLite (`test_api` 27, `test_sse` 16, `test_auth` 2) and `tests/test_knacks.js` OK. test_27 runs `client/nexus.py` against the live test server (round trip, exit codes 1 and 2).
-- `NX_TEST_DB_URL=<admin url> python3 -m unittest tests.test_api`: 27 OK on PostgreSQL 16.2 (pgserver 0.1.4 bundle, psycopg 3.3.6). Fresh DB per run. test_15 checks append-only through psycopg and that writes after restore do not collide with restored action ids (mutation check: removing the `setval` line makes test_15 fail).
-- Migration check (manual): SQLite server backup → Postgres server restore: 6 docs restored, writes after restore 200, `/api/status` shows password masked. jsdom smoke for the knack editor and menu passed 8/8 after the harness fix (missing `TextDecoder` in jsdom, not in the app). jsdom smoke for skill draft (bad output → error, good draft fills editor, nothing saved until Save) passed.
+- `python3 -m unittest tests.test_api tests.test_sse tests.test_auth`: 46 Python tests OK on SQLite (`test_api` 28, `test_sse` 16, `test_auth` 2) and `tests/test_knacks.js` OK. test_27 runs `client/nexus.py` against the live test server (round trip, exit codes 1 and 2).
+- `NX_TEST_DB_URL=<admin url> python3 -m unittest tests.test_api`: 28 OK on PostgreSQL 16.2 (pgserver 0.1.4 bundle, psycopg 3.3.6). Fresh DB per run. test_15 checks append-only through psycopg and that writes after restore do not collide with restored action ids (mutation check: removing the `setval` line makes test_15 fail).
+- Migration check (manual): SQLite server backup → Postgres server restore: 6 docs restored, writes after restore 200, `/api/status` shows password masked. jsdom smoke for the knack editor and menu passed 8/8 after the harness fix (missing `TextDecoder` in jsdom, not in the app). jsdom smoke for skill draft (bad output → error, good draft fills editor, nothing saved until Save) passed. jsdom smoke4 for plugin editor (create through Settings → Plugins, listed in state) passed.
 - `pyflakes server tests client`: clean.
 - `node --check js/*.js`: clean.
 - Live provider calls: not run (no credentials in sandbox). Behaviour checked against mock OpenAI-compatible server only.

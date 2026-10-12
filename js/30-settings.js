@@ -6,7 +6,7 @@
   const S = NX.state;
 
   const SECTIONS = [['model', 'Model'], ['theme', 'Theme'], ['roles', 'Roles'], ['skills', 'Skills'], ['knacks', 'Knacks'],
-    ['mcp', 'MCP'], ['workflows', 'Workflows'], ['data', 'Data']];
+    ['mcp', 'MCP'], ['plugins', 'Plugins'], ['workflows', 'Workflows'], ['data', 'Data']];
 
   const STEPS_EXAMPLE = [
     { id: 'plan', prompt: 'Write a short plan for: {{input}}. Use workspace_write to save it to plan.md.', mode: 'work', save_path: 'plan.md' },
@@ -29,6 +29,15 @@
       fields: [['name', 'text', 'Name'], ['url', 'text', 'Endpoint URL (Streamable HTTP JSON-RPC)'], ['enabled', 'bool', 'Enabled'],
         ['headers', 'json', 'Headers (JSON object, e.g. {"Authorization":"Bearer ..."})']],
       blank: { name: 'New MCP server', url: 'https://', enabled: true, headers: {} },
+    },
+    plugin: {
+      label: 'Plugin', list: 'plugins',
+      fields: [['name', 'text', 'Name (tool label)'], ['description', 'text', 'Description (shown to the model)'],
+        ['url', 'text', 'Endpoint URL (receives POST, JSON body = arguments)'], ['enabled', 'bool', 'Enabled'],
+        ['parameters', 'json', 'Parameters (JSON schema, type object)'],
+        ['headers', 'json', 'Headers (JSON object)']],
+      blank: { name: 'New plugin', description: '', url: 'https://', enabled: true,
+        parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, headers: {} },
     },
     workflow: {
       label: 'Workflow', list: 'workflows',

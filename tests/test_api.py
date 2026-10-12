@@ -554,5 +554,62 @@ class NexusTests(unittest.TestCase):
         self.assertEqual(json.loads(err)["status"], 401)
 
 
+    def test_28_plugin_tool_gated_by_group_and_validated(self):
+        srv, purl = M.start_plugin()
+        try:
+            base = {"name": "Echo", "description": "Echo text", "url": purl + "/echo", "headers": {"X-Test": "1"}}
+            s, res = self.api.call("POST", "/api/doc/plugin", dict(base, url="ftp://x"))
+            self.assertEqual(s, 400, res)
+            s, res = self.api.call("POST", "/api/doc/plugin", dict(base, surprise=1))
+            self.assertEqual(s, 400, res)
+            s, res = self.api.call("POST", "/api/doc/plugin", dict(base, parameters={"type": "array"}))
+            self.assertEqual(s, 400, res)
+            s, res = self.api.call("POST", "/api/doc/plugin", dict(base, headers={"X-Bad": "a\r\nb"}))
+            self.assertEqual(s, 400, res)
+            s, plugin = self.api.call("POST", "/api/doc/plugin", base)
+            self.assertEqual(s, 201, plugin)
+            pid = plugin["id"]
+            tool = "plugin_" + pid
+
+            # not exposed unless the plugins group is enabled on the chat
+            s, off = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "work",
+                                                          "tool_groups": ["workspace"]})
+            s, ctx = self.api.call("GET", f"/api/chats/{off['id']}/context")
+            self.assertNotIn(tool, json.dumps(ctx["snapshot"]["tools"]))
+
+            s, on = self.api.call("POST", "/api/chats", {"project_id": NexusTests.project_id, "mode": "work",
+                                                         "tool_groups": ["plugins"]})
+            s, ctx = self.api.call("GET", f"/api/chats/{on['id']}/context")
+            self.assertIn(tool, json.dumps(ctx["snapshot"]["tools"]))
+
+            s, res = self.api.call("POST", f"/api/chats/{on['id']}/messages", {"content": "PLUGIN:hello plugin"})
+            self.assertEqual(s, 200, res)
+            call = res["assistant"]["meta"]["tools"][0]
+            self.assertEqual((call["name"], call["ok"]), (tool, True))
+            self.assertEqual(M._Plugin.last["body"], {"text": "hello plugin"})
+            self.assertEqual(M._Plugin.last["x_test"], "1")
+            self.assertEqual(M._Plugin.last["project"], NexusTests.project_id)
+            self.assertEqual(M._Plugin.last["path"], "/echo")
+
+            # failing endpoint: tool error, turn still completes
+            s, _ = self.api.call("PUT", f"/api/doc/plugin/{pid}", dict(base, url=purl + "/fail"))
+            self.assertEqual(s, 200)
+            s, res = self.api.call("POST", f"/api/chats/{on['id']}/messages", {"content": "PLUGIN:again"})
+            self.assertEqual(s, 200, res)
+            self.assertFalse(res["assistant"]["meta"]["tools"][0]["ok"])
+
+            # disabled: removed from specs
+            s, _ = self.api.call("PUT", f"/api/doc/plugin/{pid}", dict(base, url=purl + "/echo", enabled=False))
+            s, ctx = self.api.call("GET", f"/api/chats/{on['id']}/context")
+            self.assertNotIn(tool, json.dumps(ctx["snapshot"]["tools"]))
+
+            s, acts = self.api.call("GET", "/api/actions?limit=500")
+            self.assertTrue(any(a["type"] == "tool.executed" and a["ref"] == tool for a in acts["actions"]))
+            s, _ = self.api.call("DELETE", f"/api/doc/plugin/{pid}")
+            self.assertEqual(s, 200)
+        finally:
+            srv.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()
