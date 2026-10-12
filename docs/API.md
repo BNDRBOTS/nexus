@@ -12,7 +12,7 @@ Errors: `{"error": "<message>"}` with status
 |---|---|---|
 | GET | `/api/state` | `version, modes, tool_groups, inbox, settings, projects, chats[], roles, skills, workflows, mcp, python_enabled, gateway_configured, token_required` |
 | GET | `/api/status?probe=1` | `provider{route,model,reachable,latency_ms,error}, mcp[], python_enabled, version, db{path,docs,files,actions}` |
-| PUT | `/api/settings` | merged settings. Keys: `system_prompt, context_chars (>=1000), provider{mode, preset, base_url, model, temperature, thinking, reasoning_effort}, theme{...}`. `preset` is one of deepseek, zai, openrouter, custom. `thinking` is null, enabled or disabled (DeepSeek). `reasoning_effort` is a per-preset list (see `provider_presets` in `/api/state`). Invalid values return 400. |
+| PUT | `/api/settings` | merged settings. Keys: `system_prompt, context_chars (>=1000), knacks, provider{mode, preset, base_url, model, temperature, thinking, reasoning_effort}, theme{...}`. `knacks` is a list of `{id, label, prompt}` (max 20; id `^[a-z][a-z0-9_-]{1,31}$`, not a built-in id, unique; label 1-24 chars; prompt 1-2000 chars; unknown fields rejected). Invalid values return 400 and nothing is saved. `preset` is one of deepseek, zai, openrouter, custom. `thinking` is null, enabled or disabled (DeepSeek). `reasoning_effort` is a per-preset list (see `provider_presets` in `/api/state`). Invalid values return 400. |
 | GET | `/api/actions?project=&chat=&limit=` | `{actions[]}` newest first. Each: `id, ts, project_id, chat_id, type, ref, payload` |
 | GET | `/api/backup` | full JSON export |
 | POST | `/api/restore` | body = backup export; replaces all data; records `backup.restored` |

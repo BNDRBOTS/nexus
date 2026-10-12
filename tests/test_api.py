@@ -421,6 +421,39 @@ class NexusTests(unittest.TestCase):
         self.assertEqual(user["meta"].get("display"), "Shorter: label only")
         self.assertEqual(user["content"], "LONG PROMPT BODY")
 
+    def test_24_user_knacks_validated_and_stored(self):
+        put = lambda knacks: self.api.call("PUT", "/api/settings", {"knacks": knacks})
+        bad = [
+            "not-a-list",
+            [{"id": "u-x1", "label": "A", "prompt": "p"}] * 21,
+            [{"id": "next", "label": "A", "prompt": "p"}],          # built-in id
+            [{"id": "Bad Id", "label": "A", "prompt": "p"}],         # id format
+            [{"id": "u-x1", "label": "A", "prompt": "p"}, {"id": "u-x1", "label": "B", "prompt": "q"}],
+            [{"id": "u-x1", "label": "A", "prompt": "p", "extra": 1}],
+            [{"id": "u-x1", "label": "   ", "prompt": "p"}],
+            [{"id": "u-x1", "label": "A" * 25, "prompt": "p"}],
+            [{"id": "u-x1", "label": "A", "prompt": "p" * 2001}],
+            ["str"],
+        ]
+        for case in bad:
+            s, res = put(case)
+            self.assertEqual(s, 400, (case, res))
+        s, res = put([{"id": "u-ab12", "label": "  Tighten  ", "prompt": " Tighten the text. "}])
+        self.assertEqual(s, 200, res)
+        self.assertEqual(res["knacks"], [{"id": "u-ab12", "label": "Tighten", "prompt": "Tighten the text."}])
+        s, st = self.api.call("GET", "/api/state")
+        self.assertEqual([k["id"] for k in st["settings"]["knacks"]], ["u-ab12"])
+        s, res = put([])
+        self.assertEqual(s, 200)
+        self.assertEqual(res["knacks"], [])
+
+    def test_25_builtin_knack_ids_match_js_catalog(self):
+        import re as _re
+        from server import config as Cfg
+        js = open(os.path.join(ROOT, "js", "05-knacks.js"), encoding="utf-8").read()
+        ids = tuple(_re.findall(r"\{ id: '([a-z]+)'", js))
+        self.assertEqual(ids, Cfg.KNACK_BUILTIN_IDS)
+
 
 if __name__ == "__main__":
     unittest.main()

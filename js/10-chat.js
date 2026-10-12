@@ -181,7 +181,7 @@
       !isUser && isLast ? `<button class="act" data-act="regen" data-id="${m.id}">Regenerate</button>` : '',
       isUser ? `<button class="act" data-act="edit" data-id="${m.id}">Edit</button>` : '',
       !isUser ? `<span class="knack-wrap"><button class="act" data-knack-toggle="${m.id}">Knacks</button>` +
-        `<div class="knack-menu hidden" role="menu">${NX.KNACKS.map((k) =>
+        `<div class="knack-menu hidden" role="menu">${NX.knackCatalog(S.settings && S.settings.knacks).map((k) =>
           `<button role="menuitem" data-knack="${k.id}" data-id="${m.id}">${esc(k.label)}</button>`).join('')}</div></span>` : '',
       `<button class="act" data-act="del" data-id="${m.id}">Delete</button>`,
     ].join('');
@@ -385,7 +385,7 @@
     if (!S.chat) return;
     if (S.busy) return NX.toast('Wait for the current reply', 'err');
     const msg = (S.chat.messages || []).find((m) => m.id === mid);
-    const k = msg && NX.knackPrompt(id, msg.content);
+    const k = msg && NX.knackPrompt(id, msg.content, S.settings && S.settings.knacks);
     if (!k) return;
     const label = `${k.label}: ${msg.content.slice(0, 80)}`;
     await turn(`/api/chats/${S.chat.id}/messages`, k.content, label, false, false, label);
@@ -534,6 +534,7 @@
       $('#send').onclick = send;
       $('#toggleSidebar').onclick = () => document.getElementById('app').classList.toggle('side-closed');
       NX.bus.on('file-changed', () => NX.panels && NX.panels.render());
+      NX.bus.on('knacks-changed', () => { if (S.chat && !S.busy) renderMessages(); });
     },
   };
 })();

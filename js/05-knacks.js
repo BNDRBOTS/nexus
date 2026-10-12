@@ -1,5 +1,5 @@
-/* NX knacks: per-message prompt transforms. Data only, plus one pure builder (NX.knackPrompt).
-   Add a knack by appending to NX.KNACKS. id is stable (used by the UI and by tests). */
+/* NX knacks: per-message prompt transforms. Built-ins are data here; user knacks come from settings.knacks
+   (validated server-side). NX.knackCatalog / NX.knackPrompt are pure. Built-in ids are stable (tests check them). */
 (function () {
   'use strict';
   const NX = (window.NX = window.NX || {});
@@ -14,9 +14,17 @@
     { id: 'table', label: 'To table', prompt: 'If the message below contains structured data, convert it to a Markdown table. Otherwise reply NO_TABLE.' },
   ];
 
+  /* Pure: built-ins first, then user knacks (ids are unique server-side; built-ins win on a clash). */
+  NX.knackCatalog = function (userKnacks) {
+    const builtin = NX.KNACKS;
+    const ids = new Set(builtin.map((k) => k.id));
+    const extra = (Array.isArray(userKnacks) ? userKnacks : []).filter((k) => k && !ids.has(k.id));
+    return builtin.concat(extra);
+  };
+
   /* Pure: returns {label, content} for a knack applied to a message body, or null if id unknown. */
-  NX.knackPrompt = function (id, text) {
-    const k = NX.KNACKS.find((x) => x.id === id);
+  NX.knackPrompt = function (id, text, userKnacks) {
+    const k = NX.knackCatalog(userKnacks).find((x) => x.id === id);
     if (!k) return null;
     const raw = String(text || '');
     const body = raw.length > MAX_CHARS ? raw.slice(0, MAX_CHARS) + '\n[truncated to ' + MAX_CHARS + ' chars]' : raw;

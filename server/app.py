@@ -114,6 +114,38 @@ def actions(req):
 
 # ---------- settings & docs ----------
 
+def normalize_knacks(raw):
+    """Validates user knacks. Returns a clean list of {id, label, prompt}; raises HttpError(400) on any violation."""
+    if not isinstance(raw, list):
+        raise HttpError(400, "knacks must be a list")
+    if len(raw) > C.KNACK_MAX:
+        raise HttpError(400, f"at most {C.KNACK_MAX} knacks")
+    out, seen = [], set()
+    for i, k in enumerate(raw):
+        where = f"knacks[{i}]"
+        if not isinstance(k, dict):
+            raise HttpError(400, f"{where} must be an object")
+        extra = set(k) - {"id", "label", "prompt"}
+        if extra:
+            raise HttpError(400, f"{where}: unknown fields {sorted(extra)}")
+        kid = k.get("id")
+        if not isinstance(kid, str) or not re.match(C.KNACK_ID_RE, kid):
+            raise HttpError(400, f"{where}.id must match {C.KNACK_ID_RE}")
+        if kid in C.KNACK_BUILTIN_IDS:
+            raise HttpError(400, f"{where}.id '{kid}' is a built-in knack")
+        if kid in seen:
+            raise HttpError(400, f"{where}.id '{kid}' is duplicated")
+        label = k.get("label")
+        if not isinstance(label, str) or not label.strip() or len(label.strip()) > C.KNACK_LABEL_MAX:
+            raise HttpError(400, f"{where}.label must be 1-{C.KNACK_LABEL_MAX} chars")
+        prompt = k.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.strip()) > C.KNACK_PROMPT_MAX:
+            raise HttpError(400, f"{where}.prompt must be 1-{C.KNACK_PROMPT_MAX} chars")
+        seen.add(kid)
+        out.append({"id": kid, "label": label.strip(), "prompt": prompt.strip()})
+    return out
+
+
 @route("PUT", "/api/settings")
 def put_settings(req):
     body = req.json()
@@ -136,6 +168,7 @@ def put_settings(req):
         raise HttpError(400, f"provider.reasoning_effort must be one of {list(C.REASONING_EFFORTS)}")
     if not isinstance(cur.get("context_chars"), int) or cur["context_chars"] < 1000:
         raise HttpError(400, "context_chars must be an integer >= 1000")
+    cur["knacks"] = normalize_knacks(cur.get("knacks", []))
     store.put_doc("setting", "app", cur)
     return 200, store.get_settings()
 

@@ -5,7 +5,7 @@
   const { esc, $, byId } = NX.util;
   const S = NX.state;
 
-  const SECTIONS = [['model', 'Model'], ['theme', 'Theme'], ['roles', 'Roles'], ['skills', 'Skills'],
+  const SECTIONS = [['model', 'Model'], ['theme', 'Theme'], ['roles', 'Roles'], ['skills', 'Skills'], ['knacks', 'Knacks'],
     ['mcp', 'MCP'], ['workflows', 'Workflows'], ['data', 'Data']];
 
   const STEPS_EXAMPLE = [
@@ -60,7 +60,7 @@
     const sec = $('#sec');
     sec.onclick = null;
     sec.oninput = null;
-    const fn = { model: modelSec, theme: themeSec, data: dataSec }[id];
+    const fn = { model: modelSec, theme: themeSec, knacks: knacksSec, data: dataSec }[id];
     if (fn) return fn(sec);
     docSec(sec, Object.keys(FORMS).find((k) => FORMS[k].list === id));
   }
@@ -266,6 +266,45 @@
     } catch (err) {
       NX.toast(err.message, 'err');
     }
+  }
+
+  /* ---------- Knacks: user-defined prompt transforms. Built-ins are listed, not editable. Server validates. ---------- */
+  function knacksSec(root) {
+    const rows = JSON.parse(JSON.stringify((S.settings && S.settings.knacks) || []));
+    const newId = () => 'u-' + Math.random().toString(36).slice(2, 8);
+    const max = 20;   // = config.KNACK_MAX (server enforces)
+    const draw = () => {
+      root.innerHTML = `
+        <h3>Knacks</h3>
+        <div class="muted">Per-message prompts for assistant replies (Knacks button). Built-in: ${esc(NX.KNACKS.map((k) => k.label).join(', '))}.
+          The prompt is sent with the reply text as the next turn. Max ${max} knacks.</div>
+        <div id="kList">${rows.map((k, i) => `
+          <div class="kRow" data-i="${i}">
+            <div class="field"><label>Label (max 24)</label><input class="input" data-f="label" maxlength="24" value="${esc(k.label)}"></div>
+            <div class="field"><label>Prompt (max 2000)</label><textarea class="textarea" data-f="prompt" maxlength="2000">${esc(k.prompt)}</textarea></div>
+            <div class="row"><span class="muted mono">${esc(k.id)}</span><span class="spacer"></span><button class="btn ghost" data-rm="${i}">Remove</button></div>
+          </div>`).join('') || '<div class="muted">No user knacks yet.</div>'}</div>
+        <div class="row"><button class="btn" id="kAdd" ${rows.length >= max ? 'disabled' : ''}>Add knack</button><span class="spacer"></span><button class="btn primary" id="kSave">Save knacks</button></div>`;
+    };
+    root.oninput = (e) => {
+      const row = e.target.closest('.kRow');
+      if (row && e.target.dataset.f) rows[+row.dataset.i][e.target.dataset.f] = e.target.value;
+    };
+    root.onclick = async (e) => {
+      const rm = e.target.closest('[data-rm]');
+      if (rm) { rows.splice(+rm.dataset.rm, 1); return draw(); }
+      if (e.target.closest('#kAdd')) { rows.push({ id: newId(), label: 'New knack', prompt: '' }); return draw(); }
+      if (e.target.closest('#kSave')) {
+        try {
+          S.settings = await NX.api('PUT', '/api/settings', { knacks: rows.map((r) => ({ id: r.id, label: r.label, prompt: r.prompt })) });
+          rows.splice(0, rows.length, ...JSON.parse(JSON.stringify(S.settings.knacks || [])));
+          NX.toast('Knacks saved', 'ok');
+          NX.bus.emit('knacks-changed');
+          draw();
+        } catch (err) { NX.toast(err.message, 'err'); }
+      }
+    };
+    draw();
   }
 
   /* ---------- Data: token, backup, restore, connect ---------- */

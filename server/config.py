@@ -68,12 +68,20 @@ PROVIDER_PRESETS = {
 }
 THINKING_MODES = (None, "enabled", "disabled")
 
+# Knacks: built-in ids live in js/05-knacks.js (test_api checks they match). User knacks are validated server-side.
+KNACK_BUILTIN_IDS = ("continue", "next", "checklist", "shorter", "critique", "table")
+KNACK_ID_RE = r"^[a-z][a-z0-9_-]{1,31}$"
+KNACK_MAX = 20
+KNACK_LABEL_MAX = 24
+KNACK_PROMPT_MAX = 2000
+
 REASONING_EFFORTS = (None, "minimal", "low", "medium", "high", "xhigh", "max", "none")  # union; per-preset list in PROVIDER_PRESETS
 
 DEFAULT_SETTINGS = {
     "system_prompt": ("You are Nexus, an execution assistant. Be exact and complete. "
                       "Never claim work was saved or executed unless a tool result confirms it."),
     "context_chars": 48000,
+    "knacks": [],                              # user-defined knacks: [{id, label, prompt}] (see app.normalize_knacks)
     "provider": {
         "mode": "custom",                       # custom = user key from browser | gateway = server env key
         "preset": "deepseek",                   # see PROVIDER_PRESETS
