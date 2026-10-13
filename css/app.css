@@ -296,3 +296,5 @@ kbd { font-family: var(--mono); font-size: 11px; opacity: .6; margin-left: 6px; 
 .knack-menu button { text-align: left; background: none; border: 0; color: var(--text); padding: 6px 10px;
   border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
 .knack-menu button:hover { background: var(--surface-2); }
+.kRow { display: flex; flex-direction: column; gap: 8px; padding: 10px; margin-bottom: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }

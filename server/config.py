@@ -54,6 +54,8 @@ MODES = {
 }
 
 TOOL_GROUPS = ["workspace", "status", "sources", "python", "mcp", "plugins"]   # plugins: off in every mode default
+# Tool groups a project token may never use: python runs host code (can read data/token), mcp/plugins are owner endpoints.
+PROJECT_TOKEN_DENY = ("python", "mcp", "plugins")
 
 # Provider presets: defaults only. Every value here was checked against the provider's current docs.
 # openrouter has no default model: model IDs are user-supplied (discover via GET /api/v1/models).

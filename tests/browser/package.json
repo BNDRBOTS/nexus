@@ -1,0 +1,8 @@
+{
+  "name": "nexus-browser-tests",
+  "private": true,
+  "description": "jsdom tests for the Nexus UI. Run via: python3 -m unittest tests.test_browser (after npm install here).",
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  }
+}

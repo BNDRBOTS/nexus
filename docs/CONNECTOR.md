@@ -7,6 +7,8 @@ Machine contract for driving Nexus chats from another process. Two surfaces, sam
 
 ## Auth and env
 
+Use a project token as `NX_TOKEN` for a connector scoped to one project. It works for the chat, file, action, python and workflow-run routes above. Owner-only routes (state, settings, docs, backup, token management) return 403 with it.
+
 | Var | Use |
 |---|---|
 | `NX_URL` | base URL, default `http://127.0.0.1:8000` |
@@ -68,5 +70,5 @@ The CLI sends turns as JSON and waits for the full reply. For token streaming, c
 
 - Chat history is budget-trimmed to `context_chars` (default 48,000). Older turns drop from the model input; they stay in storage.
 - One turn per chat at a time. A second concurrent turn on the same chat returns 409 (`processing another turn`).
-- Project isolation is logical. A token holder can read any project. Use one token per trust boundary.
-- Tool execution follows the chat's mode and `tool_groups`. `python_run` exists only when `NX_ENABLE_PYTHON=1`.
+- Project isolation: use a project token (created with `POST /api/projects/{id}/tokens`, or from the Project panel) for any connector that should only see one project. Owner token = all projects. Tokens are shown once; revoke them the same way.
+- Tool execution follows the chat's mode and `tool_groups`. `python_run` exists only when `NX_ENABLE_PYTHON=1`, and never for a project token. Project tokens also never get MCP or plugin tools.

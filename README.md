@@ -24,6 +24,8 @@ python3 -m unittest tests.test_api tests.test_sse tests.test_auth
 node tests/test_knacks.js
 ```
 
+Browser tests (jsdom, real UI against a live server): `cd tests/browser && npm install && cd ../.. && python3 -m unittest tests.test_browser`. Skipped if node or jsdom is missing.
+
 Same API suite on Postgres (creates and drops a fresh database per run):
 
 ```bash
@@ -48,6 +50,8 @@ Database backends:
 - **SQLite** (default): `data/nexus.db`, WAL. No setup.
 - **Postgres**: `NX_DB_URL=postgresql://user:pass@host/db python3 -m server.app`. Tables `doc`, `file`, `action` (BIGSERIAL id). The action table is append-only through triggers, as in SQLite. `/api/status` shows the URL with the password masked.
 - **Move between backends**: `GET /api/backup` from the old server, `POST /api/restore` on the new one. Restore replaces all data on the target.
+
+Project tokens: Project panel → Access tokens (or `POST /api/projects/{id}/tokens`). A token works only inside its project. See `docs/API.md`.
 
 Your own key: set in Settings → Model. It is kept in browser `localStorage` and sent as `X-NX-Provider-Key` per request. The server never stores or logs it.
 

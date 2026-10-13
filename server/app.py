@@ -6,6 +6,7 @@ Auth: every /api/* call needs  Authorization: Bearer <token>  (or X-NX-Token). T
       DATA_DIR/token (created 0600 on first start). NX_ALLOW_OPEN=1 disables auth (local dev only).
 Provider key (custom route): header X-NX-Provider-Key. Never stored, never logged.
 """
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -37,21 +38,41 @@ class HttpError(Exception):
         self.status = status
 
 
-def route(method, pattern):
+PROJECT_OK = set()        # handlers a project token may call; each enforces its own project scope
+PT_PREFIX = "nxp_"
+PT_MAX = 10               # project tokens per project
+
+
+def route(method, pattern, project=False):
     rx = re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern) + "$")
 
     def deco(fn):
         ROUTES.append((method, rx, fn))
+        if project:
+            PROJECT_OK.add(fn)
         return fn
     return deco
 
 
+class Principal:
+    """Owner (NX_TOKEN or open mode) or a project token bound to one project."""
+
+    def __init__(self, kind, project_id=None, token_id=None):
+        self.kind = kind
+        self.project_id = project_id
+        self.token_id = token_id
+
+
+OWNER = Principal("owner")
+
+
 class Req:
-    def __init__(self, handler, params, query, raw_body):
+    def __init__(self, handler, params, query, raw_body, principal=OWNER):
         self.h = handler
         self.p = params
         self.q = {k: v[0] for k, v in parse_qs(query).items()}
         self._raw = raw_body
+        self.principal = principal
 
     def json(self):
         if not self._raw:
@@ -109,9 +130,15 @@ def status(req):
                  "db": {"path": store.db_path(), **store.counts()}, "version": C.VERSION}
 
 
-@route("GET", "/api/actions")
+@route("GET", "/api/actions", project=True)
 def actions(req):
-    rows = store.list_actions(req.q.get("project"), req.q.get("chat"), int(req.q.get("limit", "100")))
+    pid, chat = req.q.get("project"), req.q.get("chat")
+    if req.principal.kind == "project":
+        pid = pid or req.principal.project_id
+        _scope_project(req, pid)
+        if chat:
+            _scope_chat(req, chat)
+    rows = store.list_actions(pid, chat, int(req.q.get("limit", "100")))
     return 200, {"actions": rows}
 
 
@@ -219,11 +246,54 @@ def del_doc(req):
     if kind not in DOC_KINDS or req.p["id"] == C.INBOX and kind == "project":
         raise HttpError(400, "cannot delete this document")
     store.del_doc(kind, req.p["id"])
+    if kind == "project":
+        for t in store.list_docs("ptoken"):
+            if t["project_id"] == req.p["id"]:
+                store.del_doc("ptoken", t["id"])
     return 200, {"deleted": req.p["id"]}
 
 
-@route("GET", "/api/projects/{id}")
+@route("POST", "/api/projects/{id}/tokens")
+def create_project_token(req):
+    pid = req.p["id"]
+    _need_doc("project", pid)
+    body = req.json()
+    name = body.get("name", "project token")
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
+        raise HttpError(400, "name must be 1-60 characters")
+    mine = [t for t in store.list_docs("ptoken") if t["project_id"] == pid]
+    if len(mine) >= PT_MAX:
+        raise HttpError(400, f"at most {PT_MAX} tokens per project")
+    tok = PT_PREFIX + secrets.token_urlsafe(32)
+    public_id = "pt_" + secrets.token_hex(5)
+    doc = store.put_doc("ptoken", _token_hash(tok), {"project_id": pid, "public_id": public_id,
+                                                     "name": name.strip()})
+    store.add_action("token.created", public_id, {"name": doc["name"]}, project_id=pid)
+    return 201, {"id": public_id, "project_id": pid, "name": doc["name"], "created": doc["created"],
+                 "token": tok, "note": "shown once; store it now"}
+
+
+@route("GET", "/api/projects/{id}/tokens")
+def list_project_tokens(req):
+    _need_doc("project", req.p["id"])
+    rows = [{"id": t["public_id"], "name": t["name"], "created": t["created"]}
+            for t in store.list_docs("ptoken") if t["project_id"] == req.p["id"]]
+    return 200, {"tokens": rows}
+
+
+@route("DELETE", "/api/projects/{id}/tokens/{tid}")
+def revoke_project_token(req):
+    for t in store.list_docs("ptoken"):
+        if t["project_id"] == req.p["id"] and t["public_id"] == req.p["tid"]:
+            store.del_doc("ptoken", t["id"])
+            store.add_action("token.revoked", t["public_id"], {"name": t["name"]}, project_id=req.p["id"])
+            return 200, {"revoked": t["public_id"]}
+    raise HttpError(404, "token not found")
+
+
+@route("GET", "/api/projects/{id}", project=True)
 def get_project(req):
+    _scope_project(req, req.p["id"])
     project = _need_doc("project", req.p["id"])
     chats = [{"id": c["id"], "title": c.get("title", ""), "mode": c.get("mode"), "updated": c.get("updated"),
               "messages": len(c.get("messages") or [])}
@@ -235,13 +305,14 @@ def get_project(req):
 
 # ---------- chats ----------
 
-@route("POST", "/api/chats")
+@route("POST", "/api/chats", project=True)
 def create_chat(req):
     body = req.json()
     mode = body.get("mode", "work")
     if mode not in C.MODES:
         raise HttpError(400, "mode must be work|research|code")
     pid = body.get("project_id") or C.INBOX
+    _scope_project(req, pid)
     _need_doc("project", pid)
     chat_id = store.new_id("chat")
     chat = store.put_doc("chat", chat_id, {
@@ -253,14 +324,14 @@ def create_chat(req):
     return 201, chat
 
 
-@route("GET", "/api/chats/{id}")
+@route("GET", "/api/chats/{id}", project=True)
 def get_chat(req):
-    return 200, store.get_chat(req.p["id"])
+    return 200, _scope_chat(req, req.p["id"])
 
 
-@route("PATCH", "/api/chats/{id}")
+@route("PATCH", "/api/chats/{id}", project=True)
 def patch_chat(req):
-    chat = store.get_chat(req.p["id"])
+    chat = _scope_chat(req, req.p["id"])
     body = req.json()
     for k, v in body.items():
         if k not in CHAT_PATCH_FIELDS:
@@ -268,6 +339,7 @@ def patch_chat(req):
     if "mode" in body and body["mode"] not in C.MODES:
         raise HttpError(400, "mode must be work|research|code")
     if "project_id" in body:
+        _scope_project(req, body["project_id"])
         _need_doc("project", body["project_id"])
     chat.update({k: v for k, v in body.items()})
     store.put_chat(chat)
@@ -277,38 +349,42 @@ def patch_chat(req):
     return 200, chat
 
 
-@route("DELETE", "/api/chats/{id}")
+@route("DELETE", "/api/chats/{id}", project=True)
 def delete_chat(req):
-    chat = store.get_chat(req.p["id"])
+    chat = _scope_chat(req, req.p["id"])
     store.del_doc("chat", chat["id"])
     store.add_action("chat.deleted", chat["id"], {"messages": len(chat.get("messages") or [])},
                      project_id=chat.get("project_id"), chat_id=chat["id"])
     return 200, {"deleted": chat["id"]}
 
 
-@route("GET", "/api/chats/{id}/context")
+@route("GET", "/api/chats/{id}/context", project=True)
 def chat_context(req):
-    return 200, E.context_preview(req.p["id"])
+    _scope_chat(req, req.p["id"])
+    return 200, E.context_preview(req.p["id"], deny=_deny(req))
 
 
-@route("POST", "/api/chats/{id}/messages")
+@route("POST", "/api/chats/{id}/messages", project=True)
 def post_message(req):
+    _scope_chat(req, req.p["id"])
     body = req.json()
     return _turn_response(req, req.p["id"], body.get("content"), regenerate=False,
                           stream=bool(body.get("stream")) or req.q.get("stream") == "1",
-                          display=body.get("display"))
+                          display=body.get("display"), deny=_deny(req))
 
 
-@route("POST", "/api/chats/{id}/regenerate")
+@route("POST", "/api/chats/{id}/regenerate", project=True)
 def regenerate(req):
+    _scope_chat(req, req.p["id"])
     body = req.json()
     return _turn_response(req, req.p["id"], None, regenerate=True,
-                          stream=bool(body.get("stream")) or req.q.get("stream") == "1")
+                          stream=bool(body.get("stream")) or req.q.get("stream") == "1", deny=_deny(req))
 
 
-def _turn_response(req, chat_id, content, regenerate, stream, display=None):
+def _turn_response(req, chat_id, content, regenerate, stream, display=None, deny=()):
     if not stream:
-        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, display=display)
+        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, display=display,
+                        deny=deny)
         return 200, result
     h = req.h
     h.send_response(200)
@@ -327,7 +403,8 @@ def _turn_response(req, chat_id, content, regenerate, stream, display=None):
             dead["v"] = True
 
     try:
-        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, emit=emit, display=display)
+        result = E.turn(chat_id, content, regenerate=regenerate, provider_key=req.provider_key, emit=emit,
+                        display=display, deny=deny)
         emit("done", result)
     except Exception as e:
         emit("error", {"status": _status_for(e), "error": str(e)})
@@ -346,30 +423,34 @@ def _status_for(e):
     return 500
 
 
-@route("POST", "/api/chats/{id}/messages/{mid}/save")
+@route("POST", "/api/chats/{id}/messages/{mid}/save", project=True)
 def save_message(req):
+    _scope_chat(req, req.p["id"])
     body = req.json()
     meta = E.save_message_to_workspace(req.p["id"], req.p["mid"], body.get("path", ""))
     return 200, meta
 
 
-@route("POST", "/api/chats/{id}/messages/{mid}/pin")
+@route("POST", "/api/chats/{id}/messages/{mid}/pin", project=True)
 def pin_message(req):
+    _scope_chat(req, req.p["id"])
     body = req.json()
     return 200, E.set_pin(req.p["id"], req.p["mid"], body.get("pinned", True))
 
 
-@route("DELETE", "/api/chats/{id}/messages/{mid}")
+@route("DELETE", "/api/chats/{id}/messages/{mid}", project=True)
 def delete_message(req):
+    _scope_chat(req, req.p["id"])
     E.delete_message(req.p["id"], req.p["mid"])
     return 200, {"deleted": req.p["mid"]}
 
 
 # ---------- workspace files ----------
 
-@route("GET", "/api/files")
+@route("GET", "/api/files", project=True)
 def get_files(req):
     pid = req.q.get("project", C.INBOX)
+    _scope_project(req, pid)
     if "path" in req.q:
         f = store.get_file(pid, req.q["path"])
         if not f:
@@ -378,18 +459,20 @@ def get_files(req):
     return 200, {"files": store.list_files(pid)}
 
 
-@route("PUT", "/api/files")
+@route("PUT", "/api/files", project=True)
 def put_file(req):
     body = req.json()
     pid = body.get("project") or C.INBOX
+    _scope_project(req, pid)
     _need_doc("project", pid)
     meta = T.save_file(pid, body.get("path", ""), body.get("content", ""), "ui:canvas")
     return 200, meta
 
 
-@route("DELETE", "/api/files")
+@route("DELETE", "/api/files", project=True)
 def del_file(req):
     pid = req.q.get("project", C.INBOX)
+    _scope_project(req, pid)
     path = T.norm_path(req.q.get("path", ""))
     if not store.del_file(pid, path):
         raise HttpError(404, "file not found")
@@ -399,23 +482,28 @@ def del_file(req):
 
 # ---------- workflows, runs, python, mcp ----------
 
-@route("POST", "/api/workflows/{id}/run")
+@route("POST", "/api/workflows/{id}/run", project=True)
 def run_workflow(req):
     body = req.json()
+    if req.principal.kind == "project":
+        _scope_project(req, body.get("project_id"))
     run = E.start_run(req.p["id"], str(body.get("input", "")), body.get("project_id"),
-                      provider_key=req.provider_key, background=True)
+                      provider_key=req.provider_key, background=True, deny=_deny(req))
     return 202, run
 
 
-@route("GET", "/api/runs/{id}")
+@route("GET", "/api/runs/{id}", project=True)
 def get_run(req):
-    return 200, _need_doc("run", req.p["id"])
+    run = _need_doc("run", req.p["id"])
+    _scope_project(req, run.get("project_id"))
+    return 200, run
 
 
 @route("POST", "/api/python")
 def run_python(req):
     body = req.json()
     pid = body.get("project_id") or C.INBOX
+    _scope_project(req, pid)
     project = _need_doc("project", pid)
     return 200, T.run_python(str(body.get("code", "")), pid, project.get("scope") or [])
 
@@ -439,12 +527,40 @@ def restore(req):
 
 # ---------- dispatch ----------
 
-def _authed(handler):
+def _token_hash(tok):
+    return hashlib.sha256(tok.encode("utf-8")).hexdigest()
+
+
+def _principal(handler):
+    """Owner token → OWNER. Project token (nxp_…) → its project. Anything else → None (401)."""
     if not C.TOKEN:
-        return True
+        return OWNER
     auth = handler.headers.get("Authorization", "")
     given = auth[7:] if auth.startswith("Bearer ") else handler.headers.get("X-NX-Token", "")
-    return hmac.compare_digest(given.encode("utf-8"), C.TOKEN.encode("utf-8"))
+    if hmac.compare_digest(given.encode("utf-8"), C.TOKEN.encode("utf-8")):
+        return OWNER
+    if given.startswith(PT_PREFIX):
+        doc = store.get_doc("ptoken", _token_hash(given))
+        if doc:
+            return Principal("project", doc["project_id"], doc["public_id"])
+    return None
+
+
+def _scope_project(req, pid):
+    """Project tokens may touch only their own project. Owner: no check."""
+    if req.principal.kind == "project" and pid != req.principal.project_id:
+        raise HttpError(403, "token is not scoped to this project")
+
+
+def _deny(req):
+    """Tool groups removed for this request: project tokens cannot use python, mcp or plugins."""
+    return C.PROJECT_TOKEN_DENY if req.principal.kind == "project" else ()
+
+
+def _scope_chat(req, chat_id):
+    chat = store.get_chat(chat_id)
+    _scope_project(req, chat.get("project_id"))
+    return chat
 
 
 STATIC_OK = re.compile(r"^/(css|js)/[A-Za-z0-9_\-./]+$")
@@ -518,14 +634,17 @@ class Handler(BaseHTTPRequestHandler):
                     break
         if not matched:
             return self._send_json(405 if path_hit else 404, {"error": "method not allowed" if path_hit else "not found"})
-        if not _authed(self):
+        principal = _principal(self)
+        if principal is None:
             return self._send_json(401, {"error": "token required"})
+        if principal.kind == "project" and matched not in PROJECT_OK:
+            return self._send_json(403, {"error": "owner token required"})
 
         length = int(self.headers.get("Content-Length") or 0)
         if length > C.BODY_CAP:
             return self._send_json(413, {"error": "body too large"})
         raw = self.rfile.read(length) if length else b""
-        req = Req(self, params, url.query, raw)
+        req = Req(self, params, url.query, raw, principal)
         try:
             status, payload = matched(req)
             if status is None:       # streamed response already written

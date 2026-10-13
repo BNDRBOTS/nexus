@@ -1,6 +1,14 @@
 # Nexus HTTP API
 
 Base: `http(s)://<host>:<port>`. JSON bodies. All `/api/*` routes need `Authorization: Bearer <token>` (or `X-NX-Token`). Token = `NX_TOKEN`, else the value in `DATA_DIR/token` (created 0600 on first start). `NX_ALLOW_OPEN=1` disables auth (local dev only). Static UI files are served without a token.
+
+Two principals:
+- **Owner** (`NX_TOKEN` / `data/token`, or open mode): all routes.
+- **Project token** (`nxp_…`, created per project): only the routes marked project-scoped below, and only for its own project. Any other route returns 403 `owner token required`. Project-scoped routes return 403 `token is not scoped to this project` for other projects. A chat is scoped through its `project_id`. Unknown or revoked tokens return 401.
+
+Project-scoped routes: `GET /api/projects/{id}`, `POST /api/chats` (own `project_id` only; no Inbox), `GET|PATCH|DELETE /api/chats/{id}` (PATCH `project_id` must also be own), `GET /api/chats/{id}/context`, `POST /api/chats/{id}/messages`, `POST /api/chats/{id}/regenerate`, message save/pin/delete, `GET|PUT|DELETE /api/files`, `GET /api/actions` (defaults to own project; `chat` must be own), `POST /api/workflows/{id}/run` (`project_id` must be own), `GET /api/runs/{id}`.
+
+Project tokens never receive the `python`, `mcp` or `plugins` tool groups, in chat turns, regenerate, workflow runs or the context preview (`C.PROJECT_TOKEN_DENY`). Those groups have no spec and no route for that request. `POST /api/python` is owner-only.
 Custom-route model key: header `X-NX-Provider-Key` (per request, never stored).
 
 Errors: `{"error": "<message>"}` with status
@@ -25,11 +33,18 @@ Errors: `{"error": "<message>"}` with status
 | PUT | `/api/doc/{kind}/{id}` | full replace of the doc body |
 | DELETE | `/api/doc/{kind}/{id}` | inbox project cannot be deleted |
 | GET | `/api/projects/{id}` | `{project, chats[], files[], actions[]}` |
+| POST | `/api/projects/{id}/tokens` | owner only. body `{name?}` (1-60 chars). 201 `{id, project_id, name, created, token, note}`. `token` is returned once; only its SHA-256 is stored. Max 10 per project. Records `token.created` |
+| GET | `/api/projects/{id}/tokens` | owner only. `{tokens[{id, name, created}]}` (never the token value) |
+| DELETE | `/api/projects/{id}/tokens/{tid}` | owner only. Revokes immediately. Records `token.revoked`. Deleting a project revokes its tokens |
 | POST | `/api/skills/draft` | body `{description}` (1-4000 chars). One model call, no tools, temperature 0.3. Returns `{name, instructions, model, route}`. Saves nothing; the UI fills the new-skill form for review. Records `skill.drafted`. Errors: 400 `Invalid` (bad description, model output not a JSON object, missing or oversized name (max 60) or instructions (max 4000)). |
 
 Project fields: `name, instructions, scope[] (workspace paths), status{state: active|paused|done, note, next_step, updated}`.
 Role: `name, title, system_prompt`. Skill: `name, instructions`. MCP: `name, url, enabled, headers{}`. Workflow: `name, steps[{id, prompt, mode, save_path}]`.
 Plugin: `name, description (≤500), url (http(s), ≤2000), enabled, parameters (JSON schema, type object, ≤8000 chars), headers{} (≤10 entries, values ≤500, no CR/LF)`. Unknown fields → 400. Id prefix `plg_`. Tool name `plugin_<id>`, group `plugins` (off by default; enable per chat).
+
+## Knacks (per-message prompts)
+
+Client-side only. The assistant reply's Knacks menu sends `knack.prompt + "\n\n---\n" + reply text` as the next user turn. The reply text is cut at 8,000 chars with a marker line. Built-ins: `continue, next, checklist, shorter, critique, table` (`js/05-knacks.js`). User knacks come from `settings.knacks` (validation under `PUT /api/settings`). A user knack cannot reuse a built-in id; if it does, the built-in wins. Tested by `tests/test_knacks.js` and test_24 / test_25.
 
 ## Chats
 
@@ -90,7 +105,7 @@ Paths are normalized relative paths. Traversal is rejected. Max 2,000,000 chars 
 |---|---|---|
 | POST | `/api/workflows/{id}/run` | `{"input", "project_id"}` → 202 run record (`status: queued`) |
 | GET | `/api/runs/{id}` | `{id, workflow_id, project_id, status: queued|running|done|failed, steps[], error, ended}` |
-| POST | `/api/python` | `{"project_id", "code"}` → `{ok, output, summary}`. Requires `NX_ENABLE_PYTHON=1` (off by default). Child process gets a minimal environment and rlimits; no server secrets in env. Not a filesystem sandbox. |
+| POST | `/api/python` | owner only. `{"project_id", "code"}` → `{ok, output, summary}`. Requires `NX_ENABLE_PYTHON=1` (off by default). Child process gets a minimal environment and rlimits; no server secrets in env. Not a filesystem sandbox. |
 | POST | `/api/mcp/{id}/probe` | `{ok, tools[]}` or `{ok:false, error}` |
 
 Plugin call contract: `POST <url>`, `Content-Type: application/json`, body = tool arguments object, headers = plugin `headers` + `X-NX-Project: <project id>`. 20 s timeout. Response read capped at 48,000 bytes. Redirects are followed by urllib.
@@ -115,7 +130,7 @@ curl $NX/api/runs/$RUN -H "Authorization: Bearer $NX_TOKEN"
 | `workspace_write` | workspace | write a project file (record `file.saved`) |
 | `search_sources` | sources | keyword search over Source Scope only; returns chunks with paths |
 | `project_set_status` | status | set state, verified note, next step (record `status.updated`) |
-| `python_run` | python | run code in temp dir with scope files; saves new/changed text files |
+| `python_run` | python | run code in temp dir with scope files; saves new/changed text files. Never available to project tokens |
 | `mcp_<server>_<tool>` | mcp | MCP tool from an enabled server |
 | `plugin_<id>` | plugins | HTTP tool: POST `url` with JSON arguments; response text is the output (≤12,000 chars). Non-2xx or unreachable = tool error |
 
@@ -129,6 +144,6 @@ Budget: `context_chars` (default 48,000). Snapshot hash is stored on each assist
 
 ## Action record types
 
-`backup.restored` · `chat.created` · `chat.deleted` · `chat.moved` · `file.deleted` · `file.saved` · `message.deleted` · `message.pinned` · `message.saved` · `message.superseded` · `message.unpinned` · `run.finished` · `skill.drafted` · `status.updated` · `tool.executed` · `turn.error` · `workflow.step`.
+`backup.restored` · `chat.created` · `chat.deleted` · `chat.moved` · `file.deleted` · `file.saved` · `message.deleted` · `message.pinned` · `message.saved` · `message.superseded` · `message.unpinned` · `run.finished` · `skill.drafted` · `status.updated` · `token.created` · `token.revoked` · `tool.executed` · `turn.error` · `workflow.step`.
 
 Append-only: UPDATE and DELETE on this table are blocked by triggers.

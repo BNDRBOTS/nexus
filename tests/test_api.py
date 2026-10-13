@@ -611,5 +611,148 @@ class NexusTests(unittest.TestCase):
             srv.shutdown()
 
 
+    def test_29_project_tokens_scoped_and_revocable(self):
+        A = self.api
+        s, pa = A.call("POST", "/api/doc/project", {"name": "Scope A"}); self.assertEqual(s, 201)
+        s, pb = A.call("POST", "/api/doc/project", {"name": "Scope B"}); self.assertEqual(s, 201)
+        pa, pb = pa["id"], pb["id"]
+        s, cb = A.call("POST", "/api/chats", {"project_id": pb, "mode": "work"}); self.assertEqual(s, 201)
+        s, wf = A.call("POST", "/api/doc/workflow", {"name": "W", "steps": [{"id": "s", "prompt": "{{input}}"}]})
+        self.assertEqual(s, 201)
+
+        # validation and owner-only management
+        s, _ = A.call("POST", f"/api/projects/{pa}/tokens", {"name": ""}); self.assertEqual(s, 400)
+        s, _ = A.call("POST", "/api/projects/prj_missing/tokens", {"name": "x"}); self.assertEqual(s, 404)
+        s, tok = A.call("POST", f"/api/projects/{pa}/tokens", {"name": "ci"}); self.assertEqual(s, 201, tok)
+        self.assertTrue(tok["token"].startswith("nxp_"))
+        ta = tok["token"]
+        s, listing = A.call("GET", f"/api/projects/{pa}/tokens")
+        self.assertEqual(s, 200)
+        self.assertNotIn(ta, json.dumps(listing), "token value must not be listed")
+        T = Api(self.base, token=ta)
+        s, _ = T.call("GET", f"/api/projects/{pa}/tokens"); self.assertEqual(s, 403)
+
+        # own project: allowed
+        s, _ = T.call("GET", f"/api/projects/{pa}"); self.assertEqual(s, 200)
+        s, ca = T.call("POST", "/api/chats", {"project_id": pa, "mode": "work"}); self.assertEqual(s, 201)
+        s, res = T.call("POST", f"/api/chats/{ca['id']}/messages", {"content": "ECHO:scoped"})
+        self.assertEqual(s, 200, res)
+        s, _ = T.call("PUT", "/api/files", {"project": pa, "path": "scoped/a.md", "content": "a"})
+        self.assertEqual(s, 200)
+        s, _ = T.call("GET", f"/api/files?project={pa}&path=scoped/a.md"); self.assertEqual(s, 200)
+        s, _ = T.call("PATCH", f"/api/chats/{ca['id']}", {"title": "renamed"}); self.assertEqual(s, 200)
+        s, _ = T.call("POST", "/api/python", {"project_id": pa, "code": "print(1)"}); self.assertEqual(s, 403)  # owner only
+
+        # other project and owner-only routes: denied
+        s, _ = T.call("GET", f"/api/projects/{pb}"); self.assertEqual(s, 403)
+        s, _ = T.call("GET", f"/api/chats/{cb['id']}"); self.assertEqual(s, 403)
+        s, _ = T.call("POST", f"/api/chats/{cb['id']}/messages", {"content": "ECHO:leak"}); self.assertEqual(s, 403)
+        s, _ = T.call("POST", "/api/chats", {"project_id": pb, "mode": "work"}); self.assertEqual(s, 403)
+        s, _ = T.call("POST", "/api/chats", {"mode": "work"}); self.assertEqual(s, 403)   # inbox is not ours
+        s, _ = T.call("PATCH", f"/api/chats/{ca['id']}", {"project_id": pb}); self.assertEqual(s, 403)
+        s, _ = T.call("GET", f"/api/files?project={pb}"); self.assertEqual(s, 403)
+        s, _ = T.call("PUT", "/api/files", {"project": pb, "path": "x.md", "content": "x"}); self.assertEqual(s, 403)
+        s, _ = T.call("GET", f"/api/actions?project={pb}"); self.assertEqual(s, 403)
+        s, _ = T.call("POST", "/api/python", {"project_id": pb, "code": "print(1)"}); self.assertEqual(s, 403)
+        s, _ = T.call("POST", f"/api/workflows/{wf['id']}/run", {"input": "x", "project_id": pb}); self.assertEqual(s, 403)
+        s, _ = T.call("GET", "/api/state"); self.assertEqual(s, 403)
+        s, _ = T.call("GET", "/api/status"); self.assertEqual(s, 403)
+        s, _ = T.call("GET", "/api/backup"); self.assertEqual(s, 403)
+        s, _ = T.call("POST", "/api/doc/project", {"name": "nope"}); self.assertEqual(s, 403)
+        s, _ = T.call("PUT", "/api/settings", {"system_prompt": "x"}); self.assertEqual(s, 403)
+
+        # actions: default to own project only; the record has no token value
+        s, acts = T.call("GET", "/api/actions?limit=500"); self.assertEqual(s, 200)
+        self.assertTrue(acts["actions"])
+        self.assertTrue(all(a["project_id"] == pa for a in acts["actions"]))
+        self.assertNotIn(ta, json.dumps(acts))
+
+        # CLI connector works with a project token inside its project only
+        code, out, _ = self._cli(["project", "get", pa], token=ta); self.assertEqual(code, 0, out)
+        code, _, err = self._cli(["project", "get", pb], token=ta); self.assertEqual(code, 1, err)
+
+        # unknown or malformed tokens
+        s, _ = Api(self.base, token="nxp_bogus").call("GET", f"/api/projects/{pa}"); self.assertEqual(s, 401)
+
+        # revocation takes effect immediately
+        s, _ = A.call("DELETE", f"/api/projects/{pa}/tokens/{tok['id']}"); self.assertEqual(s, 200)
+        s, _ = T.call("GET", f"/api/projects/{pa}"); self.assertEqual(s, 401)
+        s, acts = A.call("GET", "/api/actions?limit=500")
+        types = [(a["type"], a["ref"]) for a in acts["actions"]]
+        self.assertIn(("token.created", tok["id"]), types)
+        self.assertIn(("token.revoked", tok["id"]), types)
+
+        # limit per project
+        for i in range(10):
+            s, _ = A.call("POST", f"/api/projects/{pa}/tokens", {"name": f"t{i}"}); self.assertEqual(s, 201)
+        s, _ = A.call("POST", f"/api/projects/{pa}/tokens", {"name": "one too many"}); self.assertEqual(s, 400)
+
+        # deleting a project revokes its tokens
+        s, extra = A.call("POST", f"/api/projects/{pb}/tokens", {"name": "b"}); self.assertEqual(s, 201)
+        s, _ = A.call("DELETE", f"/api/doc/project/{pb}"); self.assertEqual(s, 200)
+        s, _ = Api(self.base, token=extra["token"]).call("GET", "/api/state"); self.assertEqual(s, 401)
+
+
+    def test_30_project_token_denied_python_mcp_plugins(self):
+        A = self.api
+        s, pa = A.call("POST", "/api/doc/project", {"name": "Deny Project"}); self.assertEqual(s, 201)
+        pa = pa["id"]
+        srv, purl = M.start_plugin()
+        try:
+            s, plugin = A.call("POST", "/api/doc/plugin", {"name": "Deny Echo", "url": purl + "/echo"})
+            self.assertEqual(s, 201)
+            s, tok = A.call("POST", f"/api/projects/{pa}/tokens", {"name": "deny"}); self.assertEqual(s, 201)
+            T = Api(self.base, token=tok["token"])
+            groups = ["workspace", "python", "mcp", "plugins"]
+            s, chat = A.call("POST", "/api/chats", {"project_id": pa, "mode": "code", "tool_groups": groups})
+            self.assertEqual(s, 201)
+            ptool = "plugin_" + plugin["id"]
+
+            # owner sees python and plugin tools for this chat
+            s, octx = A.call("GET", f"/api/chats/{chat['id']}/context")
+            self.assertIn("python_run", json.dumps(octx["snapshot"]["tools"]))
+            self.assertIn(ptool, json.dumps(octx["snapshot"]["tools"]))
+
+            # project token: none of them in the context preview
+            s, tctx = T.call("GET", f"/api/chats/{chat['id']}/context"); self.assertEqual(s, 200)
+            names = json.dumps(tctx["snapshot"]["tools"])
+            self.assertNotIn("python_run", names)
+            self.assertNotIn(ptool, names)
+            self.assertIn("workspace_write", names)
+
+            # project token turn: the model's python call has no route, nothing executes
+            before = M._Plugin.last
+            s, res = T.call("POST", f"/api/chats/{chat['id']}/messages", {"content": "PY:print('denied')"})
+            self.assertEqual(s, 200, res)
+            self.assertEqual(res["assistant"]["meta"].get("tools", []), [])
+            s, res = T.call("POST", f"/api/chats/{chat['id']}/messages", {"content": "PLUGIN:should not run"})
+            self.assertEqual(s, 200, res)
+            self.assertEqual(M._Plugin.last, before, "denied plugin must not be called")
+
+            # owner turn on the same chat: python executes
+            s, res = A.call("POST", f"/api/chats/{chat['id']}/messages", {"content": "PY:print(42)"})
+            self.assertEqual(s, 200, res)
+            self.assertEqual(res["assistant"]["meta"]["tools"][0]["name"], "python_run")
+
+            # workflow run by a project token: deny applies to every step
+            s, wf = A.call("POST", "/api/doc/workflow", {"name": "Deny WF", "steps": [
+                {"id": "s", "prompt": "PY:print(7)", "mode": "code"}]})
+            self.assertEqual(s, 201)
+            s, run = T.call("POST", f"/api/workflows/{wf['id']}/run", {"input": "x", "project_id": pa})
+            self.assertEqual(s, 202, run)
+            for _ in range(100):
+                s, run = T.call("GET", f"/api/runs/{run['id']}")
+                if run["status"] in ("done", "failed"):
+                    break
+                time.sleep(0.1)
+            self.assertEqual(run["status"], "done", run)
+            self.assertEqual(run["steps"][0]["tools"], 0)
+            s, acts = A.call("GET", f"/api/actions?project={pa}&limit=500")
+            self.assertFalse(any(a["type"] == "tool.executed" and a["ref"] == "python_run" and a["payload"].get("ok")
+                                 and a["chat_id"] is None for a in acts["actions"]), "no python run from workflow")
+        finally:
+            srv.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()

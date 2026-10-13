@@ -84,11 +84,14 @@ def _mcp_name(server_id, tool):
     return re.sub(r"[^A-Za-z0-9_]", "_", f"mcp_{server_id}_{tool}")[:64]
 
 
-def specs_for(chat, mode, settings):
-    """Returns (openai tool specs, routes). routes: name -> ("builtin", n) | ("mcp", server_id, tool)."""
+def specs_for(chat, mode, settings, deny=()):
+    """Returns (openai tool specs, routes). routes: name -> ("builtin", n) | ("plugin", id) | ("mcp", server_id, tool).
+    deny: tool groups removed for this request (project tokens). Removed groups have no spec and no route."""
     groups = mode["tool_groups"] if chat.get("tool_groups") is None else chat["tool_groups"]
     specs, routes = [], {}
     for g in groups:
+        if g in deny:
+            continue
         if g == "mcp":
             for srv in store.list_docs("mcp"):
                 if not srv.get("enabled"):

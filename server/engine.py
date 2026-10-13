@@ -124,12 +124,12 @@ def _tool_ctx(project, chat_id):
     return {"project_id": project.get("id", C.INBOX), "project": project, "chat_id": chat_id}
 
 
-def _load_turn(chat, st, provider_key):
+def _load_turn(chat, st, provider_key, deny=()):
     project = _project(chat)
     mode = _mode(chat)
     role = _role(chat)
     skills = _skills(chat)
-    specs, routes = T.specs_for(chat, mode, st)
+    specs, routes = T.specs_for(chat, mode, st, deny)
     cfg = P.resolve(st, provider_key)
     temp = st["provider"].get("temperature")
     if temp is None:
@@ -137,7 +137,7 @@ def _load_turn(chat, st, provider_key):
     return project, mode, role, skills, specs, routes, cfg, temp
 
 
-def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None, display=None):
+def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None, display=None, deny=()):
     with _ChatLock(chat_id):
         chat = store.get_chat(chat_id)
         old = None
@@ -161,7 +161,7 @@ def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None, 
         t0 = time.time()
         try:
             st = store.get_settings()
-            project, mode, role, skills, specs, routes, cfg, temp = _load_turn(ctx_chat, st, provider_key)
+            project, mode, role, skills, specs, routes, cfg, temp = _load_turn(ctx_chat, st, provider_key, deny)
             query = next((m["content"] for m in reversed(ctx_chat["messages"]) if m["role"] == "user"), "")
             messages, snap = X.build(ctx_chat, project, st, mode, role, query, skills)
             snap["tools"] = [s["function"]["name"] for s in specs]
@@ -196,14 +196,14 @@ def turn(chat_id, content=None, regenerate=False, provider_key=None, emit=None, 
         return {"assistant": am, "context": snap}
 
 
-def context_preview(chat_id):
+def context_preview(chat_id, deny=()):
     chat = store.get_chat(chat_id)
     st = store.get_settings()
     project = _project(chat)
     mode = _mode(chat)
     query = next((m["content"] for m in reversed(chat["messages"]) if m["role"] == "user"), "")
     messages, snap = X.build(chat, project, st, mode, _role(chat), query, _skills(chat))
-    specs, _ = T.specs_for(chat, mode, st)
+    specs, _ = T.specs_for(chat, mode, st, deny)
     snap["tools"] = [s["function"]["name"] for s in specs]
     return {"messages": messages, "snapshot": snap}
 
@@ -255,7 +255,7 @@ def _fill(template, values):
     return out
 
 
-def start_run(wf_id, input_text="", project_id=None, provider_key=None, background=True):
+def start_run(wf_id, input_text="", project_id=None, provider_key=None, background=True, deny=()):
     wf = store.get_doc("workflow", wf_id)
     if not wf:
         raise store.NotFound(f"workflow {wf_id}")
@@ -266,14 +266,14 @@ def start_run(wf_id, input_text="", project_id=None, provider_key=None, backgrou
            "input_chars": len(input_text or ""), "steps": [], "error": None, "ended": None}
     store.put_doc("run", run["id"], run)
     if background:
-        threading.Thread(target=_execute_run, args=(run["id"], wf, input_text or "", provider_key),
+        threading.Thread(target=_execute_run, args=(run["id"], wf, input_text or "", provider_key, deny),
                          daemon=True).start()
     else:
-        _execute_run(run["id"], wf, input_text or "", provider_key)
+        _execute_run(run["id"], wf, input_text or "", provider_key, deny)
     return store.get_doc("run", run["id"])
 
 
-def _execute_run(run_id, wf, input_text, provider_key):
+def _execute_run(run_id, wf, input_text, provider_key, deny=()):
     run = store.get_doc("run", run_id)
     pid = run["project_id"]
     project = store.get_doc("project", pid) or store.get_doc("project", C.INBOX)
@@ -285,7 +285,7 @@ def _execute_run(run_id, wf, input_text, provider_key):
         for i, step in enumerate(wf["steps"]):
             pseudo = {"id": run_id, "mode": step.get("mode") if step.get("mode") in C.MODES else "work",
                       "messages": [], "project_id": pid, "role_id": wf.get("role_id")}
-            project_, mode_, role, skills, specs, routes, cfg, temp = _load_turn(pseudo, st, provider_key)
+            project_, mode_, role, skills, specs, routes, cfg, temp = _load_turn(pseudo, st, provider_key, deny)
             prompt = _fill(step["prompt"], {"input": input_text, "prev": prev})
             msgs, snap = X.build(pseudo, project_, st, mode_, role, prompt + "\n" + input_text, skills)
             msgs.append({"role": "user", "content": prompt})

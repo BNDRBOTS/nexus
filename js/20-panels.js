@@ -158,11 +158,16 @@
   }
 
   /* ---------- Project: instructions, scope, status, workflows ---------- */
+  let newToken = null;   // {project_id, token}: shown once after creation, cleared on next render
+
   async function renderProject(body) {
     const p = NX.chat.currentProject();
     if (!p) { body.innerHTML = '<div class="muted">No project selected.</div>'; return; }
     await loadFiles();
     const detail = await NX.api('GET', '/api/projects/' + p.id);
+    const tokens = (await NX.api('GET', `/api/projects/${p.id}/tokens`)).tokens;
+    const shown = newToken && newToken.project_id === p.id ? newToken : null;
+    newToken = null;
     const st = p.status || {};
     const scope = p.scope || [];
     const wfs = S.workflows.filter((w) => !w.project_id || w.project_id === p.id);
@@ -190,6 +195,12 @@
       <h3>Workflows</h3>
       <div>${wfs.length ? wfs.map((w) => `<div class="card row"><span style="flex:1">${esc(w.name)} <span class="muted">${(w.steps || []).length} steps</span></span>
         <button class="mini" data-wf="${esc(w.id)}">Run</button></div>`).join('') : '<div class="muted">No workflows. Create one in Settings &rarr; Workflows.</div>'}</div>
+      <h3>Access tokens</h3>
+      <div class="muted">Project-scoped API tokens for connectors (this project only). Shown once on creation.</div>
+      ${shown ? `<div class="card"><div class="muted">New token (copy now):</div><div class="mono" style="word-break:break-all">${esc(shown.token)}</div></div>` : ''}
+      <div>${tokens.map((t) => `<div class="card row"><span style="flex:1">${esc(t.name)} <span class="muted mono">${esc(t.id)}</span></span>
+        <button class="mini" style="color:var(--danger)" data-revoke="${esc(t.id)}">Revoke</button></div>`).join('') || '<div class="muted">No tokens.</div>'}</div>
+      <div class="row"><input id="pTokName" class="input" placeholder="token name" maxlength="60"><button class="btn" id="pTokNew">Create token</button></div>
       <h3>Chats</h3>
       <div>${detail.chats.length ? detail.chats.map((c) => `<button class="nav-item" data-chat="${esc(c.id)}"><span class="t">${esc(c.title)}</span><span class="sub">${c.messages} msgs</span></button>`).join('') : '<div class="muted">No chats in this project.</div>'}</div>
       <h3>Recent record</h3>
@@ -223,7 +234,23 @@
       $('#input').value = 'Continue from the last verified state. Next step: ' + (st.next_step || '');
       NX.chat.send();
     };
+    $('#pTokNew', body).onclick = async () => {
+      const name = $('#pTokName', body).value.trim() || 'project token';
+      try {
+        const res = await NX.api('POST', `/api/projects/${p.id}/tokens`, { name });
+        newToken = { project_id: p.id, token: res.token };
+        NX.toast('Token created', 'ok');
+        render();
+      } catch (e) { NX.toast(e.message, 'err'); }
+    };
     body.onclick = async (e) => {
+      const rv = e.target.closest('[data-revoke]');
+      if (rv) {
+        if (!(await NX.confirm('Revoke token', 'Connectors using this token lose access immediately.'))) return;
+        await NX.api('DELETE', `/api/projects/${p.id}/tokens/${rv.dataset.revoke}`);
+        NX.toast('Token revoked', 'ok');
+        return render();
+      }
       const c = e.target.closest('[data-chat]');
       if (c) { await NX.chat.open(c.dataset.chat); return render(); }
       const w = e.target.closest('[data-wf]');
