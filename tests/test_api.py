@@ -693,6 +693,54 @@ class NexusTests(unittest.TestCase):
         s, _ = Api(self.base, token=extra["token"]).call("GET", "/api/state"); self.assertEqual(s, 401)
 
 
+    def test_32_workflow_trigger_auth(self):
+        """External trigger = POST /api/workflows/{id}/run with the same bearer token as the UI."""
+        A = self.api
+        s, pa = A.call("POST", "/api/doc/project", {"name": "Trigger A"}); self.assertEqual(s, 201)
+        pa = pa["id"]
+        s, wf = A.call("POST", "/api/doc/workflow", {"name": "Trigger WF", "project_id": pa,
+                                                    "steps": [{"id": "s", "prompt": "ECHO:{{input}}"}]})
+        self.assertEqual(s, 201)
+        run_path = f"/api/workflows/{wf['id']}/run"
+
+        s, _ = A.call("POST", run_path, {"input": "x"}, token=False); self.assertEqual(s, 401, "no token")
+        s, _ = Api(self.base, "wrong-token").call("POST", run_path, {"input": "x"}); self.assertEqual(s, 401)
+
+        s, tok = A.call("POST", f"/api/projects/{pa}/tokens", {"name": "trigger"}); self.assertEqual(s, 201)
+        T = Api(self.base, tok["token"])
+        s, _ = T.call("POST", run_path, {"input": "x"}); self.assertEqual(s, 403, "project token must name its project")
+        s, run = T.call("POST", run_path, {"input": "x", "project_id": pa}); self.assertEqual(s, 202, run)
+        self.assertEqual(run["project_id"], pa)
+
+        s, run = A.call("POST", run_path, {"input": "y"}); self.assertEqual(s, 202, run)
+        self.assertEqual(run["project_id"], pa, "owner run defaults to the workflow's project")
+
+        s, _ = A.call("DELETE", f"/api/projects/{pa}/tokens/{tok['id']}"); self.assertEqual(s, 200)
+        s, _ = T.call("POST", run_path, {"input": "x", "project_id": pa}); self.assertEqual(s, 401, "revoked token")
+
+    def test_31_chat_prompt_injected_and_clearable(self):
+        A = self.api
+        s, chat = A.call("POST", "/api/chats", {"title": "Prompt chat"}); self.assertEqual(s, 201)
+        cid = chat["id"]
+        s, _ = A.call("PATCH", f"/api/chats/{cid}", {"chat_prompt": "Answer in one word. CHATPROMPT-31"})
+        self.assertEqual(s, 200)
+        s, res = A.call("POST", f"/api/chats/{cid}/messages", {"content": "ECHO:first"}); self.assertEqual(s, 200)
+        sent = M._Model.seen[-1]["body"]["messages"]
+        sys_msgs = [m for m in sent if m["role"] == "system"]
+        self.assertTrue(any("CHATPROMPT-31" in m["content"] for m in sys_msgs), "chat prompt sent to model")
+        first_user = next(i for i, m in enumerate(sent) if m["role"] == "user")
+        idx = next(i for i, m in enumerate(sent) if m["role"] == "system" and "CHATPROMPT-31" in m["content"])
+        self.assertLess(idx, first_user, "chat prompt precedes history")
+        s, ctx = A.call("GET", f"/api/chats/{cid}/context"); self.assertEqual(s, 200)
+        self.assertTrue(any("CHATPROMPT-31" in m["content"] for m in ctx["messages"]), "context shows chat prompt")
+        s, _ = A.call("PATCH", f"/api/chats/{cid}", {"chat_prompt": ""}); self.assertEqual(s, 200)
+        s, ctx = A.call("GET", f"/api/chats/{cid}/context")
+        self.assertFalse(any("CHATPROMPT-31" in m["content"] for m in ctx["messages"]), "cleared prompt gone")
+        s, _ = A.call("POST", f"/api/chats/{cid}/messages", {"content": "ECHO:second"}); self.assertEqual(s, 200)
+        sent = M._Model.seen[-1]["body"]["messages"]
+        self.assertFalse(any("CHATPROMPT-31" in m["content"] for m in sent if m["role"] == "system"),
+                         "cleared prompt not sent to model")
+
     def test_30_project_token_denied_python_mcp_plugins(self):
         A = self.api
         s, pa = A.call("POST", "/api/doc/project", {"name": "Deny Project"}); self.assertEqual(s, 201)

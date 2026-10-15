@@ -7,7 +7,7 @@ Machine contract for driving Nexus chats from another process. Two surfaces, sam
 
 ## Auth and env
 
-Use a project token as `NX_TOKEN` for a connector scoped to one project. It works for the chat, file, action, python and workflow-run routes above. Owner-only routes (state, settings, docs, backup, token management) return 403 with it.
+Use a project token as `NX_TOKEN` for a connector scoped to one project. It works for the chat, file, action and workflow-run routes above (workflow runs need `project_id` set to that project). Owner-only routes (state, settings, docs, backup, token management, `POST /api/python`) return 403 with it. Workflow triggers from outside the server: see "External trigger" in `docs/API.md`.
 
 | Var | Use |
 |---|---|

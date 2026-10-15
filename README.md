@@ -7,7 +7,7 @@ Lightweight AI workspace. One Python process (stdlib only) serves the API and th
 - **Workspace**: per-project files. Save any reply as a file. Code mode can run Python against scope files.
 - **Record**: append-only action log (saved messages, tool results, file writes, status changes, runs, deletions).
 - **Context snapshot**: exact message list sent for a chat, with block sizes, dropped history, scope, retrieval, hash.
-- **Workflows**: ordered steps run server-side. Trigger from the UI or over HTTP.
+- **Workflows**: ordered steps run server-side. Trigger from the UI or over HTTP (same bearer token; see the trigger auth rules in `docs/API.md`).
 - **MCP**: Streamable HTTP servers; tools appear as `mcp_<server>_<tool>`.
 - **Model route**: presets for DeepSeek, Z.ai, OpenRouter, or any OpenAI-compatible endpoint. Your own key (per request, browser-held) or an operator gateway (server key). Native reasoning is stored and shown separately from the answer.
 
@@ -20,7 +20,7 @@ python3 -m server.app          # http://0.0.0.0:8000
 Tests (end-to-end against a mock model and mock MCP server, plus unit tests for the stream decoder):
 
 ```bash
-python3 -m unittest tests.test_api tests.test_sse tests.test_auth
+python3 -m unittest tests.test_api tests.test_sse tests.test_auth tests.test_resume
 node tests/test_knacks.js
 ```
 

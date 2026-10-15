@@ -1,5 +1,5 @@
 // Runs all browser tests against NX_URL with owner token NX_TOKEN. Exit 1 on any failure.
-const tests = [require('./skills'), require('./plugins'), require('./project_tokens')];
+const tests = [require('./skills'), require('./plugins'), require('./project_tokens'), require('./project_scope')];
 (async () => {
   const base = process.env.NX_URL;
   const token = process.env.NX_TOKEN;

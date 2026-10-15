@@ -114,11 +114,22 @@ Provider contract (checked against provider docs, 2026-10): DeepSeek sends `thin
 
 Workflow step: `prompt` may contain `{{input}}` (run input) and `{{prev}}` (previous step output). `save_path` writes the step output to the project workspace. Each step appends a `workflow.step` record. On finish: `run.finished` record, and project `status` is updated with a summary.
 
+External trigger (`POST /api/workflows/{id}/run`) auth:
+
+- Same bearer token as the UI: the owner token (`NX_TOKEN`, or `data/token`) or a project token. There is no separate webhook secret, request signing, IP allowlist or callback.
+- Owner: `project_id` is optional. It defaults to the workflow's `project_id`, then Inbox.
+- Project token: `project_id` is required and must be the token's own project. Omitting it returns 403. Python, MCP and plugin tools are denied to every step (`C.PROJECT_TOKEN_DENY`).
+- Missing, wrong or revoked token: 401. Open mode (`NX_ALLOW_OPEN=1`) removes the check, so anyone who can reach the server can trigger workflows. Do not set it on a reachable host.
+- Provider key: the run uses the `X-NX-Provider-Key` header if sent. In custom mode a trigger with no header runs with an empty key, so send the header unless the provider needs none. Gateway mode uses the server's `NX_GATEWAY_KEY` and ignores the header.
+- Response: 202 with a queued run. Poll `GET /api/runs/{id}`. There is no completion callback. Runs are not rate-limited or queued; each trigger starts a background thread.
+- Test: `test_32_workflow_trigger_auth` (401 without or with a bad token, 403 for a project token without `project_id`, 202 for own project, 401 after revoke; mutation-checked).
+
 External trigger example:
 
 ```bash
 curl -X POST $NX/api/workflows/$WF/run -H "Authorization: Bearer $NX_TOKEN" \
-  -H "Content-Type: application/json" -d '{"input":"Q3 pricing review","project_id":"'$PRJ'"}'
+  -H "X-NX-Provider-Key: $PROVIDER_KEY" -H "Content-Type: application/json" \
+  -d '{"input":"Q3 pricing review","project_id":"'$PRJ'"}'
 curl $NX/api/runs/$RUN -H "Authorization: Bearer $NX_TOKEN"
 ```
 
